@@ -2,35 +2,57 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>社員ナンバー照合システム</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>車両照合システム（駐車場巡回版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding: 20px; }
-        #video { width: 100%; max-width: 500px; border-radius: 10px; background: #000; border: 3px solid #333; }
-        #result-container { margin-top: 20px; min-height: 150px; padding: 15px; border-radius: 10px; background: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        #status { font-size: 14px; color: #666; margin-bottom: 10px; }
-        .info-table { width: 100%; border-collapse: collapse; margin-top: 10px; display: none; }
-        .info-table th, .info-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        .info-table th { background-color: #f2f2f2; width: 30%; }
-        .match { background: #ffcccc; border: 3px solid red !important; animation: blink 0.5s 3; }
+        body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding: 0; padding-bottom: 50px; }
+        #camera-area { position: sticky; top: 0; background: #000; z-index: 10; border-bottom: 3px solid #333; }
+        #video { width: 100%; max-height: 40vh; object-fit: cover; }
+        
+        #result-container { margin: 10px; min-height: 180px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
+        #status { font-size: 14px; color: #666; margin-bottom: 10px; font-weight: bold; }
+        
+        .info-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .info-table th, .info-table td { border: 1px solid #ddd; padding: 10px; text-align: left; font-size: 16px; }
+        .info-table th { background-color: #f8f8f8; width: 35%; color: #555; }
+        .res-plate-num { font-size: 24px; font-weight: bold; color: #007AFF; }
+        
+        .match-anim { animation: blink 0.5s 3; border: 5px solid #00FF00 !important; }
+        .alert-anim { border: 5px solid #FFA500 !important; }
         @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-        button { padding: 15px 30px; font-size: 18px; cursor: pointer; background: #007AFF; color: white; border: none; border-radius: 8px; }
+        
+        #history-area { margin: 10px; text-align: left; }
+        .history-label { font-size: 12px; color: #666; font-weight: bold; margin-left: 5px; }
+        .card { background: white; padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 8px solid #ccc; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .card.match { border-left-color: #28a745; }
+        .card.alert { border-left-color: #dc3545; background: #fff5f5; }
+        
+        button { padding: 15px 40px; font-size: 20px; cursor: pointer; background: #007AFF; color: white; border: none; border-radius: 30px; font-weight: bold; margin-top: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
     </style>
 </head>
 <body>
 
-    <h2>車両照合システム</h2>
-    <video id="video" autoplay playsinline></video>
+    <div id="camera-area">
+        <video id="video" autoplay playsinline></video>
+    </div>
     
     <div id="result-container">
         <div id="status">「スキャン開始」を押してください</div>
-        <table id="infoTable" class="info-table">
-            <tr><th>ナンバー</th><td id="res-plate"></td></tr>
-            <tr><th>社員番号</th><td id="res-id"></td></tr>
-            <tr><th>部署</th><td id="res-dept"></td></tr>
-            <tr><th>氏名</th><td id="res-name"></td></tr>
-        </table>
+        <div id="info-display" style="display:none;">
+            <div id="counter" style="color:#007AFF; font-size:12px; margin-bottom:5px;"></div>
+            <table class="info-table">
+                <tr><th>ナンバー</th><td id="res-plate" class="res-plate-num"></td></tr>
+                <tr><th>社員番号</th><td id="res-id"></td></tr>
+                <tr><th>部署</th><td id="res-dept"></td></tr>
+                <tr><th>氏名</th><td id="res-name"></td></tr>
+            </table>
+        </div>
+    </div>
+
+    <div id="history-area">
+        <div class="history-label">検知履歴（最新10件）</div>
+        <div id="history-items"></div>
     </div>
 
     <p><button id="startBtn">スキャン開始</button></p>
@@ -38,16 +60,26 @@
     <script>
         const video = document.getElementById('video');
         const statusDiv = document.getElementById('status');
-        const infoTable = document.getElementById('infoTable');
+        const infoDisplay = document.getElementById('info-display');
+        const historyItems = document.getElementById('history-items');
         const startBtn = document.getElementById('startBtn');
 
-        // ★リストの登録（ナンバー4桁をキーにします）
+        // ★リストの登録（1つのナンバーに複数の情報を [ ] で囲んで登録可能）
         const employeeList = {
-            "5395": { id: "59279", dept: "生産技術", name: "芳岡 博史" },
-            "1129": { id: "55555", dept: "第2生産部", name: "大橋 隆幸" },
-            "0001": { id: "A105", dept: "製造課", name: "鈴木 一郎" },
-            "9999": { id: "B210", dept: "開発チーム", name: "高橋 健二" }
+            "5395": [{ id: "59279", dept: "生産技術", name: "芳岡 博史" }],
+            "1129": [{ id: "55555", dept: "第2生産部", name: "大橋 隆幸" }],
+            "1122": [
+                { id: "50001", dept: "総務部", name: "佐藤 花子" },
+                { id: "50002", dept: "技術部", name: "伊藤 淳" }
+            ],
+            "8888": [
+                { id: "60001", dept: "営業部", name: "田中 太郎" },
+                { id: "60002", dept: "企画課", name: "渡辺 健" }
+            ]
         };
+
+        let lastDetected = ""; 
+        let lastTime = 0;
 
         async function setupCamera() {
             try {
@@ -56,7 +88,7 @@
                     audio: false
                 });
                 video.srcObject = stream;
-                statusDiv.innerText = "カメラ起動完了。スキャン中...";
+                statusDiv.innerText = "スキャン中... ナンバーを映してください";
             } catch (err) {
                 statusDiv.innerText = "カメラの起動に失敗しました。";
             }
@@ -68,84 +100,91 @@
             canvas.height = video.videoHeight;
             canvas.getContext('2d').drawImage(video, 0, 0);
 
-            // 数字のみ認識
             const result = await Tesseract.recognize(canvas, 'eng', {
                 tessedit_char_whitelist: '0123456789'
             });
 
-            const detectedText = result.data.text.replace(/\s+/g, '');
-            checkList(detectedText);
-        }
-
-function checkList(text) {
-            let foundKey = null;
-            // 4桁の数字を抽出（ノイズを除去して数字だけにする）
-            const match = text.match(/\d{4}/); 
-            const detectedNum = match ? match[0] : null;
-
-            if (detectedNum) {
-                // リストにあるかチェック
-                if (employeeList[detectedNum]) {
-                    displayMatch(detectedNum, employeeList[detectedNum]);
-                } else {
-                    // ★【追加】数値は読み取れたがリストにない場合
-                    displayNoMatch(detectedNum);
-                }
-            } else {
-                statusDiv.innerText = "スキャン中... (数字を探しています)";
+            const text = result.data.text;
+            const matches = text.match(/\d{4}/g); // すべての4桁数字を抽出
+            
+            if (matches) {
+                // 重複を除去して順に処理
+                [...new Set(matches)].forEach(num => processNumber(num));
             }
         }
 
-        function displayMatch(plate, data) {
+        function processNumber(num) {
+            const now = Date.now();
+            // 同じ番号は5秒間は再反応させない（連続読み上げ防止）
+            if (num === lastDetected && (now - lastTime) < 5000) return;
+            
+            lastDetected = num;
+            lastTime = now;
+
+            const dataArray = employeeList[num];
+
+            if (dataArray && dataArray.length > 0) {
+                // 該当者が1人でも複数でも順番に表示
+                dataArray.forEach((data, index) => {
+                    setTimeout(() => {
+                        displayMatch(num, data, index + 1, dataArray.length);
+                    }, index * 2500); // 2.5秒間隔で切り替え
+                });
+            } else {
+                // リストにない場合
+                displayNoMatch(num);
+            }
+        }
+
+        function displayMatch(plate, data, current, total) {
+            infoDisplay.style.display = "block";
+            document.getElementById('counter').innerText = total > 1 ? `【重複注意】 ${total}件中 ${current}件目を表示中` : "";
             document.getElementById('res-plate').innerText = plate;
             document.getElementById('res-id').innerText = data.id;
             document.getElementById('res-dept').innerText = data.dept;
             document.getElementById('res-name').innerText = data.name;
             
-            infoTable.style.display = "table";
-            video.style.border = "5px solid #00FF00"; // 一致は緑
-            
-            const msg = new SpeechSynthesisUtterance(data.name + "さんを確認しました");
-            msg.lang = 'ja-JP';
-            speechSynthesis.speak(msg);
+            video.className = "match-anim";
+            setTimeout(() => video.className = "", 1500);
+
             statusDiv.innerText = "【一致】登録車両です";
+            addHistory(plate, data, "match");
+            speak(data.name + "さんの車両候補です");
         }
 
         function displayNoMatch(num) {
-            // テーブルを隠して警告表示
-            infoTable.style.display = "none";
-            video.style.border = "5px solid #FFA500"; // 未登録はオレンジ
+            infoDisplay.style.display = "none";
+            video.className = "alert-anim";
+            setTimeout(() => video.className = "", 1500);
             
             statusDiv.innerHTML = `<b style="color:orange;">【未登録】ナンバー: ${num}</b>`;
-            
-            // 音声案内（何度も喋りすぎないよう調整が必要ならここで行う）
-            const msg = new SpeechSynthesisUtterance("未登録のナンバー、" + num + "を確認しました");
-            msg.lang = 'ja-JP';
-            speechSynthesis.speak(msg);
+            addHistory(num, {name: "未登録ユーザー", dept: "部外者"}, "alert");
+            speak("未登録のナンバー、" + num + "を確認しました");
         }
 
-        function displayMatch(plate, data) {
-            // 表示の更新
-            document.getElementById('res-plate').innerText = plate;
-            document.getElementById('res-id').innerText = data.id;
-            document.getElementById('res-dept').innerText = data.dept;
-            document.getElementById('res-name').innerText = data.name;
-            
-            infoTable.style.display = "table";
-            video.classList.add('match');
-            setTimeout(() => video.classList.remove('match'), 1500);
+        function addHistory(num, data, type) {
+            const card = document.createElement('div');
+            card.className = `card ${type}`;
+            card.innerHTML = `
+                <div>
+                    <div style="font-weight:bold;">${num} : ${data.name}</div>
+                    <div style="font-size:12px; color:#666;">${data.dept}</div>
+                </div>
+                <div style="font-size:10px; color:#999;">${new Date().toLocaleTimeString()}</div>
+            `;
+            historyItems.prepend(card);
+            if (historyItems.children.length > 10) historyItems.lastChild.remove();
+        }
 
-            // 音声案内
-            const msg = new SpeechSynthesisUtterance(data.name + "さんを確認しました");
+        function speak(text) {
+            const msg = new SpeechSynthesisUtterance(text);
             msg.lang = 'ja-JP';
             speechSynthesis.speak(msg);
-
-            statusDiv.innerText = "★一致しました★";
         }
 
         startBtn.onclick = () => {
             setupCamera();
-            setInterval(scan, 3000); // 3秒ごとに実行
+            setInterval(scan, 3000); 
             startBtn.style.display = "none";
         };
     </script>
