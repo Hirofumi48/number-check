@@ -77,24 +77,51 @@
             checkList(detectedText);
         }
 
-        function checkList(text) {
+function checkList(text) {
             let foundKey = null;
-            // 読み取った文字列の中に、登録した4桁の数字が含まれているか
-            for (let key in employeeList) {
-                if (text.includes(key)) {
-                    foundKey = key;
-                    break;
-                }
-            }
+            // 4桁の数字を抽出（ノイズを除去して数字だけにする）
+            const match = text.match(/\d{4}/); 
+            const detectedNum = match ? match[0] : null;
 
-            if (foundKey) {
-                const data = employeeList[foundKey];
-                displayMatch(foundKey, data);
+            if (detectedNum) {
+                // リストにあるかチェック
+                if (employeeList[detectedNum]) {
+                    displayMatch(detectedNum, employeeList[detectedNum]);
+                } else {
+                    // ★【追加】数値は読み取れたがリストにない場合
+                    displayNoMatch(detectedNum);
+                }
             } else {
-                statusDiv.innerText = "スキャン中... (最終検知: " + (text || "なし") + ")";
-                // 一致がない時はテーブルを隠さない（直前の結果を残す）か、
-                // 完全に消したければ infoTable.style.display = "none"; を入れる
+                statusDiv.innerText = "スキャン中... (数字を探しています)";
             }
+        }
+
+        function displayMatch(plate, data) {
+            document.getElementById('res-plate').innerText = plate;
+            document.getElementById('res-id').innerText = data.id;
+            document.getElementById('res-dept').innerText = data.dept;
+            document.getElementById('res-name').innerText = data.name;
+            
+            infoTable.style.display = "table";
+            video.style.border = "5px solid #00FF00"; // 一致は緑
+            
+            const msg = new SpeechSynthesisUtterance(data.name + "さんを確認しました");
+            msg.lang = 'ja-JP';
+            speechSynthesis.speak(msg);
+            statusDiv.innerText = "【一致】登録車両です";
+        }
+
+        function displayNoMatch(num) {
+            // テーブルを隠して警告表示
+            infoTable.style.display = "none";
+            video.style.border = "5px solid #FFA500"; // 未登録はオレンジ
+            
+            statusDiv.innerHTML = `<b style="color:orange;">【未登録】ナンバー: ${num}</b>`;
+            
+            // 音声案内（何度も喋りすぎないよう調整が必要ならここで行う）
+            const msg = new SpeechSynthesisUtterance("未登録のナンバー、" + num + "を確認しました");
+            msg.lang = 'ja-JP';
+            speechSynthesis.speak(msg);
         }
 
         function displayMatch(plate, data) {
