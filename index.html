@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合システム</title>
+    <title>車両照合システム（複数名対応・最終版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding: 0; padding-bottom: 50px; }
@@ -15,28 +15,28 @@
         #focus-guide { 
             position: absolute; top: 50%; left: 50%; 
             transform: translate(-50%, -50%); 
-            /* 日本のナンバープレート比率 1:2 に設定 */
-            width: 80vw; height: 40vw; 
+            width: 80vw; height: 40vw; /* 1:2比率 */
             border: 3px solid #00FF00; 
             box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.5);
             border-radius: 8px; pointer-events: none; 
-            display: flex; align-items: center; justify-content: center;
         }
         #focus-guide::after {
-            content: "枠内に数字を合わせてください";
-            position: absolute; bottom: -30px; color: #00FF00; font-size: 12px; font-weight: bold; width: 100%;
+            content: "枠内にナンバーを合わせてください";
+            position: absolute; bottom: -30px; color: #00FF00; font-size: 12px; font-weight: bold; width: 100%; left: 0;
         }
 
-        #result-container { margin: 15px; min-height: 160px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); position: relative; }
+        /* 結果表示エリア */
+        #result-container { margin: 15px; min-height: 160px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
         #status { font-size: 14px; color: #333; margin-bottom: 10px; font-weight: bold; background: #eee; padding: 5px; border-radius: 4px; }
         
         .info-table { width: 100%; border-collapse: collapse; }
         .info-table th, .info-table td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 15px; }
-        .info-table th { background-color: #f8f8f8; width: 35%; }
+        .info-table th { background-color: #f8f8f8; width: 35%; color: #555; }
         .res-plate-num { font-size: 26px; font-weight: bold; color: #007AFF; }
         
         /* 履歴エリア */
         #history-area { margin: 15px; text-align: left; }
+        .history-label { font-size: 12px; color: #666; font-weight: bold; margin-left: 5px; }
         .card { background: white; padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 8px solid #ccc; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .card.match { border-left-color: #28a745; }
         .card.alert { border-left-color: #dc3545; background: #fff5f5; }
@@ -65,6 +65,7 @@
     </div>
 
     <div id="history-area">
+        <div class="history-label">検知履歴（最新10件）</div>
         <div id="history-items"></div>
     </div>
 
@@ -77,16 +78,18 @@
         const historyItems = document.getElementById('history-items');
         const startBtn = document.getElementById('startBtn');
 
+        // ★リスト：すべて配列形式 [ { } ] に統一
         const employeeList = {
             "5395": [{ id: "59279", dept: "生産技術", name: "芳岡 博史" }],
             "1129": [{ id: "55555", dept: "第2生産部", name: "大橋 隆幸" }],
+            "852":  [{ id: "77777", dept: "営業部", name: "テスト三郎" }], // 3桁テスト
             "1122": [
                 { id: "50001", dept: "総務部", name: "佐藤 花子" },
                 { id: "50002", dept: "技術部", name: "伊藤 淳" }
             ],
             "8888": [
-                { id: "60001", dept: "営業部", name: "田中 太郎" },
-                { id: "60002", dept: "企画課", name: "渡辺 健" }
+                { id: "60001", dept: "営業部", name: "田中 太郎　白プリウス" },
+                { id: "60002", dept: "企画課", name: "渡辺 健　赤ベンツ" }
             ]
         };
 
@@ -97,7 +100,7 @@
         async function setupCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+                    video: { facingMode: "environment", width: 1280, height: 720 },
                     audio: false
                 });
                 video.srcObject = stream;
@@ -112,30 +115,39 @@
             isProcessing = true;
 
             const canvas = document.createElement('canvas');
-            const context = canvas.getContext('2d');
+            const ctx = canvas.getContext('2d');
+            const vW = video.videoWidth;
+            const vH = video.videoHeight;
             
-            // ビデオの実際の解像度を取得
-            const videoW = video.videoWidth;
-            const videoH = video.videoHeight;
-            
-            // 枠内（中央の比率に合わせたエリア）を計算
-            // 画面上の80vw x 40vwに相当するビデオ上の領域を切り出す
-            const cropW = videoW * 0.8;
-            const cropH = cropW * 0.5; // 1:2比率
-            const cropX = (videoW - cropW) / 2;
-            const cropY = (videoH - cropH) / 2;
+            // 1:2枠（ビデオ解像度に基づく中央エリア）を計算
+            const cW = vW * 0.8;
+            const cH = cW * 0.5;
+            const cX = (vW - cW) / 2;
+            const cY = (vH - cH) / 2;
 
-            canvas.width = cropW;
-            canvas.height = cropH;
-            context.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+            canvas.width = cW;
+            canvas.height = cH;
+            
+            // 視認性を上げる補正
+            ctx.filter = "contrast(110%) brightness(110%)";
+            ctx.drawImage(video, cX, cY, cW, cH, 0, 0, cW, cH);
 
             try {
                 const result = await Tesseract.recognize(canvas, 'eng', {
                     tessedit_char_whitelist: '0123456789'
                 });
-                const matches = result.data.text.match(/\d{4}/g);
+                
+                const text = result.data.text.replace(/\s+/g, '');
+                const matches = text.match(/\d{1,4}/g); // 1〜4桁の数字を抽出
+                
                 if (matches) {
-                    [...new Set(matches)].forEach(num => processNumber(num));
+                    // 2桁以上の有効そうな数字を抽出
+                    const validNumbers = matches.filter(n => n.length >= 2);
+                    if (validNumbers.length > 0) {
+                        [...new Set(validNumbers)].forEach(num => processNumber(num));
+                    } else {
+                        statusDiv.innerText = "スキャン中... (数字を読み取り中)";
+                    }
                 } else {
                     statusDiv.innerText = "スキャン中... (検知なし)";
                 }
@@ -148,17 +160,24 @@
 
         function processNumber(num) {
             const now = Date.now();
-            if (num === lastDetected && (now - lastTime) < 5000) return;
-            
-            lastDetected = num;
-            lastTime = now;
-
             const dataArray = employeeList[num];
-            if (dataArray && dataArray.length > 0) {
+
+            if (dataArray) {
+                // 同じ番号は5秒間無視
+                if (num === lastDetected && (now - lastTime) < 5000) return;
+                lastDetected = num;
+                lastTime = now;
+
                 dataArray.forEach((data, index) => {
-                    setTimeout(() => displayMatch(num, data, index + 1, dataArray.length), index * 2500);
+                    setTimeout(() => {
+                        displayMatch(num, data, index + 1, dataArray.length);
+                    }, index * 2500); // 複数人は2.5秒間隔で表示
                 });
-            } else {
+            } else if (num.length >= 3) {
+                // 3桁以上でリストにない場合は未登録
+                if (num === lastDetected && (now - lastTime) < 5000) return;
+                lastDetected = num;
+                lastTime = now;
                 displayNoMatch(num);
             }
         }
@@ -170,7 +189,8 @@
             document.getElementById('res-id').innerText = data.id;
             document.getElementById('res-dept').innerText = data.dept;
             document.getElementById('res-name').innerText = data.name;
-            statusDiv.innerText = "【一致】登録車両";
+            
+            statusDiv.innerText = "【一致】ナンバー " + plate;
             addHistory(plate, data, "match");
             speak(data.name + "さん");
         }
@@ -179,7 +199,7 @@
             infoDisplay.style.display = "none";
             statusDiv.innerHTML = `<b style="color:orange;">【未登録】: ${num}</b>`;
             addHistory(num, {name: "未登録", dept: "部外者"}, "alert");
-            speak("未登録、" + num);
+            speak("未登録" + num);
         }
 
         function addHistory(num, data, type) {
@@ -201,7 +221,7 @@
 
         startBtn.onclick = () => {
             setupCamera();
-            // 安定のため3秒間隔に調整
+            // 安定のため3秒間隔
             setInterval(scan, 3000); 
             startBtn.style.display = "none";
         };
