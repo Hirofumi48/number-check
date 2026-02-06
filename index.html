@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ナンバー照合くん</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding: 20px; }
+        #video { width: 100%; max-width: 500px; border-radius: 10px; background: #000; }
+        #result { font-size: 24px; font-weight: bold; margin-top: 20px; color: #333; }
+        .match { color: white; background: red; padding: 10px; border-radius: 5px; animation: blink 0.5s infinite; }
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        button { padding: 15px 30px; font-size: 18px; cursor: pointer; background: #007AFF; color: white; border: none; border-radius: 8px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <h2>ナンバー照合ツール</h2>
+    <video id="video" autoplay playsinline></video>
+    <div id="result">カメラを許可して開始してください</div>
+    <button id="startBtn">スキャン開始</button>
+
+    <script>
+        const video = document.getElementById('video');
+        const resultDiv = document.getElementById('result');
+        const startBtn = document.getElementById('startBtn');
+
+        // ★照合したいナンバー（4桁）のリストをここに入れる
+        const watchList = ["8888", "5395", "1188", "1129"];
+
+        // iPhoneのカメラを起動
+        async function setupCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: "environment" }, // 外カメラを使用
+                audio: false
+            });
+            video.srcObject = stream;
+        }
+
+        async function scan() {
+            resultDiv.innerText = "読み取り中...";
+            
+            // ビデオの現在のコマをキャプチャするためのキャンバス作成
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+
+            // Tesseract.jsで文字認識（数字のみを対象に設定）
+            const result = await Tesseract.recognize(canvas, 'eng', {
+                tessedit_char_whitelist: '0123456789' // 数字だけを読み取る
+            });
+
+            const text = result.data.text.replace(/\s+/g, ''); // 空白を削除
+            processResult(text);
+        }
+
+        function processResult(detectedText) {
+            let found = false;
+            // リスト内の数字が読み取ったテキストに含まれているかチェック
+            for (let num of watchList) {
+                if (detectedText.includes(num)) {
+                    found = true;
+                    alertMatch(num);
+                    break;
+                }
+            }
+
+            if (!found) {
+                resultDiv.innerHTML = `検知: ${detectedText || "なし"}`;
+                resultDiv.className = "";
+            }
+        }
+
+        function alertMatch(num) {
+            resultDiv.innerHTML = `<div class="match">一致発見: ${num} !!</div>`;
+            // iPhoneで音と振動（マナーモード解除が必要）
+            window.navigator.vibrate([200, 100, 200]);
+            const uttr = new SpeechSynthesisUtterance("発見しました");
+            speechSynthesis.speak(uttr);
+        }
+
+        startBtn.onclick = () => {
+            setupCamera();
+            // 3秒おきに自動スキャン
+            setInterval(scan, 3000);
+            startBtn.style.display = "none";
+        };
+    </script>
+</body>
+</html>
