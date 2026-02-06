@@ -3,88 +3,122 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ナンバー照合くん</title>
+    <title>社員ナンバー照合システム</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding: 20px; }
-        #video { width: 100%; max-width: 500px; border-radius: 10px; background: #000; }
-        #result { font-size: 24px; font-weight: bold; margin-top: 20px; color: #333; }
-        .match { color: white; background: red; padding: 10px; border-radius: 5px; animation: blink 0.5s infinite; }
+        #video { width: 100%; max-width: 500px; border-radius: 10px; background: #000; border: 3px solid #333; }
+        #result-container { margin-top: 20px; min-height: 150px; padding: 15px; border-radius: 10px; background: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        #status { font-size: 14px; color: #666; margin-bottom: 10px; }
+        .info-table { width: 100%; border-collapse: collapse; margin-top: 10px; display: none; }
+        .info-table th, .info-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        .info-table th { background-color: #f2f2f2; width: 30%; }
+        .match { background: #ffcccc; border: 3px solid red !important; animation: blink 0.5s 3; }
         @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-        button { padding: 15px 30px; font-size: 18px; cursor: pointer; background: #007AFF; color: white; border: none; border-radius: 8px; margin-top: 10px; }
+        button { padding: 15px 30px; font-size: 18px; cursor: pointer; background: #007AFF; color: white; border: none; border-radius: 8px; }
     </style>
 </head>
 <body>
 
-    <h2>ナンバー照合ツール</h2>
+    <h2>車両照合システム</h2>
     <video id="video" autoplay playsinline></video>
-    <div id="result">カメラを許可して開始してください</div>
-    <button id="startBtn">スキャン開始</button>
+    
+    <div id="result-container">
+        <div id="status">「スキャン開始」を押してください</div>
+        <table id="infoTable" class="info-table">
+            <tr><th>ナンバー</th><td id="res-plate"></td></tr>
+            <tr><th>社員番号</th><td id="res-id"></td></tr>
+            <tr><th>部署</th><td id="res-dept"></td></tr>
+            <tr><th>氏名</th><td id="res-name"></td></tr>
+        </table>
+    </div>
+
+    <p><button id="startBtn">スキャン開始</button></p>
 
     <script>
         const video = document.getElementById('video');
-        const resultDiv = document.getElementById('result');
+        const statusDiv = document.getElementById('status');
+        const infoTable = document.getElementById('infoTable');
         const startBtn = document.getElementById('startBtn');
 
-        // ★照合したいナンバー（4桁）のリストをここに入れる
-        const watchList = ["8888", "5395", "1188", "1129"];
+        // ★リストの登録（ナンバー4桁をキーにします）
+        const employeeList = {
+            "5395": { id: "59279", dept: "生産技術", name: "芳岡 博史" },
+            "1129": { id: "55555", dept: "第2生産部", name: "大橋 隆幸" },
+            "0001": { id: "A105", dept: "製造課", name: "鈴木 一郎" },
+            "9999": { id: "B210", dept: "開発チーム", name: "高橋 健二" }
+        };
 
-        // iPhoneのカメラを起動
         async function setupCamera() {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: "environment" }, // 外カメラを使用
-                audio: false
-            });
-            video.srcObject = stream;
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: "environment" },
+                    audio: false
+                });
+                video.srcObject = stream;
+                statusDiv.innerText = "カメラ起動完了。スキャン中...";
+            } catch (err) {
+                statusDiv.innerText = "カメラの起動に失敗しました。";
+            }
         }
 
         async function scan() {
-            resultDiv.innerText = "読み取り中...";
-            
-            // ビデオの現在のコマをキャプチャするためのキャンバス作成
             const canvas = document.createElement('canvas');
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             canvas.getContext('2d').drawImage(video, 0, 0);
 
-            // Tesseract.jsで文字認識（数字のみを対象に設定）
+            // 数字のみ認識
             const result = await Tesseract.recognize(canvas, 'eng', {
-                tessedit_char_whitelist: '0123456789' // 数字だけを読み取る
+                tessedit_char_whitelist: '0123456789'
             });
 
-            const text = result.data.text.replace(/\s+/g, ''); // 空白を削除
-            processResult(text);
+            const detectedText = result.data.text.replace(/\s+/g, '');
+            checkList(detectedText);
         }
 
-        function processResult(detectedText) {
-            let found = false;
-            // リスト内の数字が読み取ったテキストに含まれているかチェック
-            for (let num of watchList) {
-                if (detectedText.includes(num)) {
-                    found = true;
-                    alertMatch(num);
+        function checkList(text) {
+            let foundKey = null;
+            // 読み取った文字列の中に、登録した4桁の数字が含まれているか
+            for (let key in employeeList) {
+                if (text.includes(key)) {
+                    foundKey = key;
                     break;
                 }
             }
 
-            if (!found) {
-                resultDiv.innerHTML = `検知: ${detectedText || "なし"}`;
-                resultDiv.className = "";
+            if (foundKey) {
+                const data = employeeList[foundKey];
+                displayMatch(foundKey, data);
+            } else {
+                statusDiv.innerText = "スキャン中... (最終検知: " + (text || "なし") + ")";
+                // 一致がない時はテーブルを隠さない（直前の結果を残す）か、
+                // 完全に消したければ infoTable.style.display = "none"; を入れる
             }
         }
 
-        function alertMatch(num) {
-            resultDiv.innerHTML = `<div class="match">一致発見: ${num} !!</div>`;
-            // iPhoneで音と振動（マナーモード解除が必要）
-            window.navigator.vibrate([200, 100, 200]);
-            const uttr = new SpeechSynthesisUtterance("発見しました");
-            speechSynthesis.speak(uttr);
+        function displayMatch(plate, data) {
+            // 表示の更新
+            document.getElementById('res-plate').innerText = plate;
+            document.getElementById('res-id').innerText = data.id;
+            document.getElementById('res-dept').innerText = data.dept;
+            document.getElementById('res-name').innerText = data.name;
+            
+            infoTable.style.display = "table";
+            video.classList.add('match');
+            setTimeout(() => video.classList.remove('match'), 1500);
+
+            // 音声案内
+            const msg = new SpeechSynthesisUtterance(data.name + "さんを確認しました");
+            msg.lang = 'ja-JP';
+            speechSynthesis.speak(msg);
+
+            statusDiv.innerText = "★一致しました★";
         }
 
         startBtn.onclick = () => {
             setupCamera();
-            // 3秒おきに自動スキャン
-            setInterval(scan, 3000);
+            setInterval(scan, 3000); // 3秒ごとに実行
             startBtn.style.display = "none";
         };
     </script>
