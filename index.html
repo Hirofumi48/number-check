@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合システム（複数名対応・最終版）</title>
+    <title>車両照合システム（ナンバー形式最適化版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding: 0; padding-bottom: 50px; }
@@ -78,7 +78,7 @@
         const historyItems = document.getElementById('history-items');
         const startBtn = document.getElementById('startBtn');
 
-        // ★リスト：すべて配列形式 [ { } ] に統一
+        // ★維持されたリスト
         const employeeList = {
             "5395": [{ id: "59279", dept: "生産技術", name: "芳岡 博史" }],
             "1129": [{ id: "55555", dept: "第2生産部", name: "大橋 隆幸" }],
@@ -90,9 +90,8 @@
             "717": [{ id: "00013", dept: "品質管理部", name: "廣瀬 真紀" }],
             "6621": [{ id: "00014", dept: "第1生産部", name: "安田 " }],
             "2055": [{ id: "00015", dept: "総務部", name: "山下 隆生" }],
-            "6621": [{ id: "00016", dept: "第1生産部", name: "安田 " }],
             "61": [{ id: "00017", dept: "企画部", name: "田中 茂樹" }],
-            "852":  [{ id: "77777", dept: "営業部", name: "テスト三郎" }], // 3桁テスト
+            "852":  [{ id: "77777", dept: "営業部", name: "テスト三郎" }],
             "1122": [
                 { id: "50001", dept: "総務部", name: "佐藤 花子" },
                 { id: "50002", dept: "技術部", name: "伊藤 淳" }
@@ -129,7 +128,6 @@
             const vW = video.videoWidth;
             const vH = video.videoHeight;
             
-            // 1:2枠（ビデオ解像度に基づく中央エリア）を計算
             const cW = vW * 0.8;
             const cH = cW * 0.5;
             const cX = (vW - cW) / 2;
@@ -138,26 +136,36 @@
             canvas.width = cW;
             canvas.height = cH;
             
-            // 視認性を上げる補正
-            ctx.filter = "contrast(110%) brightness(110%)";
+            // ★コントラストを上げ、中黒やハイフンを判別しやすく補正
+            ctx.filter = "contrast(140%) brightness(105%) grayscale(100%)";
             ctx.drawImage(video, cX, cY, cW, cH, 0, 0, cW, cH);
 
             try {
+                // ハイフン(-)と、中黒誤認用のドット(.)をホワイトリストに追加
                 const result = await Tesseract.recognize(canvas, 'eng', {
-                    tessedit_char_whitelist: '0123456789'
+                    tessedit_char_whitelist: '0123456789-.'
                 });
                 
-                const text = result.data.text.replace(/\s+/g, '');
-                const matches = text.match(/\d{1,4}/g); // 1〜4桁の数字を抽出
+                let detectedText = result.data.text.trim().replace(/\s+/g, '');
+                let finalNum = "";
+
+                // --- ナンバー形式判別ロジック ---
                 
-                if (matches) {
-                    // 2桁以上の有効そうな数字を抽出
-                    const validNumbers = matches.filter(n => n.length >= 2);
-                    if (validNumbers.length > 0) {
-                        [...new Set(validNumbers)].forEach(num => processNumber(num));
-                    } else {
-                        statusDiv.innerText = "スキャン中... (数字を読み取り中)";
+                // 1. 4桁(ハイフンあり)の抽出: 「12-34」のような形式
+                const hyphenMatch = detectedText.match(/(\d{1,2})-(\d{2})/);
+                if (hyphenMatch) {
+                    finalNum = hyphenMatch[1] + hyphenMatch[2];
+                } else {
+                    // 2. 1〜3桁(中黒あり/なし)の抽出
+                    // 記号を消して残った数字を確認
+                    const numsOnly = detectedText.replace(/[^\d]/g, '');
+                    if (numsOnly.length > 0 && numsOnly.length <= 4) {
+                        finalNum = numsOnly;
                     }
+                }
+
+                if (finalNum) {
+                    processNumber(finalNum);
                 } else {
                     statusDiv.innerText = "スキャン中... (検知なし)";
                 }
@@ -173,7 +181,6 @@
             const dataArray = employeeList[num];
 
             if (dataArray) {
-                // 同じ番号は5秒間無視
                 if (num === lastDetected && (now - lastTime) < 5000) return;
                 lastDetected = num;
                 lastTime = now;
@@ -181,10 +188,10 @@
                 dataArray.forEach((data, index) => {
                     setTimeout(() => {
                         displayMatch(num, data, index + 1, dataArray.length);
-                    }, index * 2500); // 複数人は2.5秒間隔で表示
+                    }, index * 2500);
                 });
-            } else if (num.length >= 3) {
-                // 3桁以上でリストにない場合は未登録
+            } else if (num.length >= 2) { 
+                // 誤読防止のため2桁以上の場合に未登録処理
                 if (num === lastDetected && (now - lastTime) < 5000) return;
                 lastDetected = num;
                 lastTime = now;
@@ -231,7 +238,6 @@
 
         startBtn.onclick = () => {
             setupCamera();
-            // 安定のため3秒間隔
             setInterval(scan, 3000); 
             startBtn.style.display = "none";
         };
