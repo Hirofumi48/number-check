@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合システム（精度完成版）</title>
+    <title>車両照合システム（最終安定版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #000; color: #fff; margin: 0; overflow: hidden; }
@@ -11,13 +11,13 @@
         #video { width: 100%; height: 100%; object-fit: cover; }
         #focus-guide { 
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
-            width: 80vw; height: 32vw; border: 4px solid #00FF00; border-radius: 8px;
+            width: 80vw; height: 35vw; border: 4px solid #00FF00; border-radius: 12px;
             box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.6); pointer-events: none;
             z-index: 10;
         }
         #ui-panel { height: 40vh; background: #f8f9fa; color: #333; padding: 15px; box-sizing: border-box; }
         #status { font-weight: bold; color: #007AFF; margin-bottom: 5px; font-size: 14px; }
-        #res-plate { font-size: 46px; font-weight: bold; letter-spacing: 4px; margin: 0; color: #111; }
+        #res-plate { font-size: 48px; font-weight: bold; letter-spacing: 4px; margin: 0; color: #111; }
         #res-info { font-size: 24px; font-weight: bold; color: #d32f2f; margin-top: 5px; }
         .shutter-btn { 
             width: 85px; height: 85px; background: #fff; border: 6px solid #007AFF; 
@@ -37,7 +37,7 @@
     <button id="shutter" class="shutter-btn"></button>
 
     <div id="ui-panel">
-        <div id="status">数字を枠の中央にゆったり収めてタップ</div>
+        <div id="status">枠の中央に数字を合わせてタップ</div>
         <div id="res-plate">----</div>
         <div id="res-info"></div>
     </div>
@@ -69,10 +69,20 @@ async function startCamera() {
 }
 
 function findEmployee(detectedNum) {
-    const cleanDetected = detectedNum.replace(/^0+/, '');
-    if (!cleanDetected) return null;
-    for (const emp of employeeList) {
-        if (cleanDetected === emp.plate || isSimilar(cleanDetected, emp.plate)) { return emp; }
+    // 読取値の全パターンを試す（そのまま、頭の1文字消去、頭の0消去）
+    const candidates = [
+        detectedNum.replace(/[^0-9]/g, ''),
+        detectedNum.replace(/[^0-9]/g, '').substring(1),
+        detectedNum.replace(/[^0-9]/g, '').replace(/^0+/, '')
+    ];
+
+    for (const val of candidates) {
+        if (!val) continue;
+        for (const emp of employeeList) {
+            if (val === emp.plate || isSimilar(val, emp.plate)) {
+                return emp;
+            }
+        }
     }
     return null;
 }
@@ -96,29 +106,25 @@ async function takePhoto() {
     const vW = video.videoWidth;
     const vH = video.videoHeight;
 
-    // 【改良】枠の左右を10%広く切り取る（左端の1欠け対策）
     const frameW = vW * 0.85; 
-    const frameH = vW * 0.35; 
+    const frameH = vW * 0.38; 
     const startX = (vW - frameW) / 2;
     const startY = (vH - frameH) / 2;
 
     canvas.width = 800;
-    canvas.height = 350;
+    canvas.height = 360;
     
-    // 文字を太く、背景を白く飛ばす強力なフィルタ
-    ctx.filter = "contrast(250%) grayscale(100%) brightness(105%)";
-    ctx.drawImage(video, startX, startY, frameW, frameH, 0, 0, 800, 350);
+    // 【調整】コントラストを適正化し、明るさを少し抑えて白飛びを防止
+    ctx.filter = "contrast(180%) grayscale(100%) brightness(95%)";
+    ctx.drawImage(video, startX, startY, frameW, frameH, 0, 0, 800, 360);
 
     try {
         const result = await Tesseract.recognize(canvas, 'eng', {
             tessedit_char_whitelist: '0123456789',
-            // 数字が少なくても「文字」として認識させるモード
-            tessedit_pageseg_mode: '7' 
+            tessedit_pageseg_mode: '8' // 単一単語（数字の塊）として認識
         });
         
         let target = result.data.text.replace(/[^0-9]/g, '');
-        if (target.length > 4) target = target.slice(-4);
-        
         plateDiv.innerText = target || "??";
 
         const match = findEmployee(target);
