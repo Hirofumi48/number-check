@@ -3,21 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合システム（4分割マッチング版）</title>
+    <title>車両照合システム（4桁特化版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding: 0; }
-        #camera-container { position: sticky; top: 0; background: #000; z-index: 10; height: 45vh; }
+        body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
+        #camera-container { position: sticky; top: 0; background: #000; height: 45vh; overflow: hidden; }
         #video { width: 100%; height: 100%; object-fit: cover; }
         #focus-guide { 
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
-            width: 80vw; height: 30vw; border: 3px solid #00FF00; border-radius: 8px;
-            box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.5);
+            width: 70vw; height: 30vw; border: 4px solid #00FF00; border-radius: 10px;
+            box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.6); pointer-events: none;
         }
-        #result-container { margin: 15px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
-        #status { font-size: 14px; font-weight: bold; background: #333; color: #fff; padding: 8px; border-radius: 4px; }
-        .res-plate-num { font-size: 36px; font-weight: bold; color: #007AFF; letter-spacing: 5px; }
-        button { padding: 18px 40px; font-size: 18px; background: #007AFF; color: white; border: none; border-radius: 30px; font-weight: bold; margin: 10px; }
+        #result-container { margin: 20px; padding: 20px; border-radius: 15px; background: white; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+        #status { font-size: 14px; font-weight: bold; padding: 10px; margin-bottom: 10px; background: #333; color: #fff; border-radius: 5px; }
+        .res-plate-num { font-size: 40px; font-weight: bold; color: #007AFF; letter-spacing: 8px; }
+        button { padding: 20px 50px; font-size: 20px; background: #007AFF; color: white; border: none; border-radius: 40px; font-weight: bold; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -28,11 +28,11 @@
     </div>
     
     <div id="result-container">
-        <div id="status">準備中...</div>
-        <div id="info-display" style="display:none; margin-top:10px;">
+        <div id="status">カメラを起動してください</div>
+        <div id="info-display" style="display:none;">
             <div id="res-plate" class="res-plate-num">----</div>
-            <div id="res-name" style="font-size:24px; font-weight:bold; color: #333;"></div>
-            <div id="res-dept" style="color: #666;"></div>
+            <div id="res-name" style="font-size:26px; font-weight:bold; margin: 10px 0;"></div>
+            <div id="res-dept" style="font-size:18px; color: #666;"></div>
         </div>
     </div>
     <p><button id="startBtn">スキャン開始</button></p>
@@ -68,8 +68,7 @@ async function loadTemplates() {
 
 let isProcessing = false;
 
-// ピクセル比較エンジン
-function matchSingleChar(charCanvas) {
+function matchDigit(charCanvas) {
     let bestDigit = "?";
     let minDiff = Infinity;
     const cData = charCanvas.getContext('2d').getImageData(0, 0, 20, 40).data;
@@ -83,6 +82,7 @@ function matchSingleChar(charCanvas) {
 
         let diff = 0;
         for (let i = 0; i < tData.length; i += 4) {
+            // 文字色(黒)の差分を強めに計算
             diff += Math.abs(tData[i] - cData[i]);
         }
         if (diff < minDiff) { minDiff = diff; bestDigit = digit; }
@@ -98,38 +98,46 @@ async function scan() {
     const canvas = document.createElement('canvas');
     canvas.width = 400; canvas.height = 200;
     const ctx = canvas.getContext('2d');
-    ctx.filter = "contrast(200%) grayscale(100%)";
+    
+    // 強めのコントラストで文字を浮き立たせる
+    ctx.filter = "contrast(250%) grayscale(100%) brightness(90%)";
     ctx.drawImage(video, (video.videoWidth-800)/2, (video.videoHeight-400)/2, 800, 400, 0, 0, 400, 200);
 
     try {
         const result = await Tesseract.recognize(canvas, 'eng');
-        const lines = result.data.lines;
+        // 数字の「塊」を優先的に取得
+        const digitsOnly = result.data.symbols.filter(s => /[0-9]/.test(s.text));
+        
+        if (digitsOnly.length >= 1) {
+            // 文字が並んでいる範囲を特定
+            const boxX0 = Math.min(...digitsOnly.map(s => s.bbox.x0));
+            const boxX1 = Math.max(...digitsOnly.map(s => s.bbox.x1));
+            const boxY0 = Math.min(...digitsOnly.map(s => s.bbox.y0));
+            const boxY1 = Math.max(...digitsOnly.map(s => s.bbox.y1));
+            
+            const totalW = boxX1 - boxX0;
+            const totalH = boxY1 - boxY0;
 
-        if (lines.length > 0) {
-            // 一番それらしい塊（ナンバー部分）を特定
-            const box = lines[0].bbox;
-            const width = box.x1 - box.x0;
-            const height = box.y1 - box.y0;
-
-            // 塊を4つに分割してマッチング
-            let foundCode = "";
+            // 4文字と仮定して分割スキャン（ドット・ハイフン無視）
+            let detectedStr = "";
             for (let i = 0; i < 4; i++) {
                 const charCanvas = document.createElement('canvas');
                 charCanvas.width = 20; charCanvas.height = 40;
-                const charX = box.x0 + (width / 4) * i;
-                charCanvas.getContext('2d').drawImage(canvas, charX, box.y0, width/4, height, 0, 0, 20, 40);
-                foundCode += matchSingleChar(charCanvas);
+                const sliceW = totalW / 4;
+                charCanvas.getContext('2d').drawImage(canvas, boxX0 + (sliceW * i), boxY0, sliceW, totalH, 0, 0, 20, 40);
+                detectedStr += matchDigit(charCanvas);
             }
 
-            statusDiv.innerText = "読取: " + foundCode;
-            
-            // 社員リストと照合（部分一致含め）
-            for (let key in employeeList) {
-                if (foundCode.includes(key)) {
-                    showResult(key, employeeList[key]);
-                    break;
+            statusDiv.innerText = "読取結果: " + detectedStr;
+
+            for (let code in employeeList) {
+                if (detectedStr.includes(code)) {
+                    showResult(code, employeeList[code]);
+                    return; // 一致したら終了
                 }
             }
+        } else {
+            statusDiv.innerText = "スキャン中...（数字を探しています）";
         }
     } catch (e) { console.error(e); }
     isProcessing = false;
@@ -140,8 +148,9 @@ function showResult(plate, data) {
     document.getElementById('res-plate').innerText = plate;
     document.getElementById('res-name').innerText = data.name;
     document.getElementById('res-dept').innerText = data.dept;
-    statusDiv.innerText = "照合完了";
+    statusDiv.innerText = "照合一致！";
     speak(data.name);
+    isProcessing = false;
 }
 
 function speak(t) {
@@ -151,7 +160,7 @@ function speak(t) {
 }
 
 startBtn.onclick = async () => {
-    statusDiv.innerText = "起動中...";
+    statusDiv.innerText = "見本画像ロード中...";
     await loadTemplates();
     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280 } });
     video.srcObject = stream;
