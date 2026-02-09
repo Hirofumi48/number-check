@@ -3,66 +3,95 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合システム（最終形態）</title>
+    <title>車両照合システム（高精度・履歴表示版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #000; color: #fff; margin: 0; overflow: hidden; }
-        #camera-container { position: relative; width: 100vw; height: 60vh; }
+        body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
+        
+        /* カメラエリア */
+        #camera-container { position: sticky; top: 0; background: #000; z-index: 10; height: 45vh; overflow: hidden; }
         #video { width: 100%; height: 100%; object-fit: cover; }
         #focus-guide { 
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
-            width: 80vw; height: 35vw; border: 4px solid #00FF00; border-radius: 12px;
-            box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.6); pointer-events: none; z-index: 10;
+            width: 75vw; height: 35vw; border: 3px solid #00FF00; border-radius: 8px;
+            box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.5); pointer-events: none;
         }
-        #ui-panel { height: 40vh; background: #f8f9fa; color: #333; padding: 15px; box-sizing: border-box; }
-        #status { font-weight: bold; color: #007AFF; margin-bottom: 5px; font-size: 14px; }
-        #res-plate { font-size: 48px; font-weight: bold; letter-spacing: 4px; margin: 0; color: #111; }
-        #res-info { font-size: 24px; font-weight: bold; color: #d32f2f; margin-top: 5px; }
+
+        /* 結果表示エリア */
+        #result-container { margin: 15px; min-height: 160px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); text-align: left; }
+        #status { font-size: 14px; color: #007AFF; margin-bottom: 10px; font-weight: bold; text-align: center; background: #eef; padding: 5px; border-radius: 4px; }
+        
+        .info-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
+        .info-table th, .info-table td { border: 1px solid #ddd; padding: 10px; font-size: 16px; }
+        .info-table th { background-color: #f8f8f8; width: 30%; color: #555; }
+        .res-plate-num { font-size: 28px; font-weight: bold; color: #007AFF; }
+
+        /* ボタン */
         .shutter-btn { 
-            width: 85px; height: 85px; background: #fff; border: 6px solid #007AFF; 
-            border-radius: 50%; margin: -42px auto 0; position: relative; z-index: 100;
-            display: block; outline: none; box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+            width: 90px; height: 90px; background: white; border: 6px solid #007AFF; 
+            border-radius: 50%; margin: -45px auto 10px; position: relative; z-index: 100;
+            display: block; box-shadow: 0 4px 15px rgba(0,0,0,0.3); outline: none;
         }
         .shutter-btn:active { background: #007AFF; }
+
+        /* 履歴エリア */
+        #history-area { margin: 15px; text-align: left; }
+        .history-label { font-size: 13px; color: #666; font-weight: bold; margin-bottom: 8px; padding-left: 5px; }
+        .card { background: white; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 8px solid #ccc; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .card.match { border-left-color: #28a745; }
+        .card.alert { border-left-color: #dc3545; background: #fff5f5; }
     </style>
 </head>
 <body>
+
     <div id="camera-container">
         <video id="video" autoplay playsinline></video>
         <div id="focus-guide"></div>
     </div>
+    
     <button id="shutter" class="shutter-btn"></button>
-    <div id="ui-panel">
-        <div id="status">枠内に合わせてタップ（3枚連射解析）</div>
-        <div id="res-plate">----</div>
-        <div id="res-info"></div>
+
+    <div id="result-container">
+        <div id="status">大きな数字を枠に合わせてタップ</div>
+        <div id="info-display" style="display:none;">
+            <table class="info-table">
+                <tr><th>ナンバー</th><td id="res-plate" class="res-plate-num"></td></tr>
+                <tr><th>社員番号</th><td id="res-id"></td></tr>
+                <tr><th>部署</th><td id="res-dept"></td></tr>
+                <tr><th>氏名</th><td id="res-name"></td></tr>
+            </table>
+        </div>
+    </div>
+
+    <div id="history-area">
+        <div class="history-label">検知履歴（最新10件）</div>
+        <div id="history-items"></div>
     </div>
 
 <script>
 const video = document.getElementById('video');
 const shutter = document.getElementById('shutter');
 const statusDiv = document.getElementById('status');
-const plateDiv = document.getElementById('res-plate');
-const infoDiv = document.getElementById('res-info');
+const infoDisplay = document.getElementById('info-display');
+const historyItems = document.getElementById('history-items');
 
-// ここが名簿です。後でスプレッドシート連携に置き換え可能です。
+// 社員リスト
 const employeeList = [
-    { plate: "5395", name: "芳岡 博史" },
-    { plate: "1129", name: "大橋 隆幸" },
-    { plate: "90", name: "テスト90番" },
-    { plate: "582", name: "テスト582番" },
-    { plate: "5678", name: "テスト5678番" },
-    { plate: "1234", name: "テスト1234番" }
+    { plate: "5395", id: "59279", dept: "生産技術", name: "芳岡 博史" },
+    { plate: "1129", id: "55555", dept: "第2生産部", name: "大橋 隆幸" },
+    { plate: "90", id: "00090", dept: "テスト", name: "九十番" },
+    { plate: "582", id: "00582", dept: "テスト", name: "五八二番" },
+    { plate: "1234", id: "01234", dept: "営業部", name: "サンプル" },
+    { plate: "5678", id: "05678", dept: "企画部", name: "見本" }
 ];
 
 let isProcessing = false;
 
 async function startCamera() {
-    const constraints = { video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } };
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        video.srcObject = stream;
-    } catch (err) { statusDiv.innerText = "カメラ起動エラー"; }
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: "environment", width: { ideal: 1280 } } 
+    });
+    video.srcObject = stream;
 }
 
 function findEmployee(detectedNum) {
@@ -72,11 +101,8 @@ function findEmployee(detectedNum) {
 
     for (const val of candidates) {
         if (!val) continue;
-        for (const emp of employeeList) {
-            if (val === emp.plate || (val.length === emp.plate.length && isSimilar(val, emp.plate))) {
-                return emp;
-            }
-        }
+        const match = employeeList.find(emp => emp.plate === val || (val.length === emp.plate.length && isSimilar(val, emp.plate)));
+        if (match) return match;
     }
     return null;
 }
@@ -87,26 +113,20 @@ function isSimilar(s1, s2) {
     return diff <= 1;
 }
 
-// 単一画像の解析
 async function processFrame() {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     const vW = video.videoWidth;
     const vH = video.videoHeight;
-    const frameW = vW * 0.82; 
-    const frameH = vW * 0.35; 
-    canvas.width = 800; canvas.height = 350;
+    const frameW = vW * 0.8; 
+    const frameH = vW * 0.4;
+    canvas.width = 800; canvas.height = 400;
     ctx.filter = "contrast(180%) grayscale(100%) brightness(95%)";
-    ctx.drawImage(video, (vW-frameW)/2, (vH-frameH)/2, frameW, frameH, 0, 0, 800, 350);
-
-    const result = await Tesseract.recognize(canvas, 'eng', {
-        tessedit_char_whitelist: '0123456789',
-        tessedit_pageseg_mode: '8'
-    });
+    ctx.drawImage(video, (vW-frameW)/2, (vH-frameH)/2, frameW, frameH, 0, 0, 800, 400);
+    const result = await Tesseract.recognize(canvas, 'eng', { tessedit_char_whitelist: '0123456789', tessedit_pageseg_mode: '8' });
     return result.data.text.replace(/[^0-9]/g, '');
 }
 
-// 3回リトライ解析
 async function takePhoto() {
     if (isProcessing) return;
     isProcessing = true;
@@ -120,20 +140,39 @@ async function takePhoto() {
         const num = await processFrame();
         lastNum = num;
         finalMatch = findEmployee(num);
-        if (finalMatch) break; // 一致したら即終了
-        await new Promise(r => setTimeout(r, 200)); // 0.2秒待って次を撮る
+        if (finalMatch) break;
+        await new Promise(r => setTimeout(r, 150));
     }
 
     if (finalMatch) {
-        plateDiv.innerText = finalMatch.plate;
-        infoDiv.innerText = finalMatch.name;
-        statusDiv.innerText = "照合一致";
-        speak(finalMatch.name);
+        displayResult(finalMatch.plate, finalMatch, "match");
     } else {
-        plateDiv.innerText = lastNum || "??";
-        statusDiv.innerText = "未登録 (" + lastNum + ")";
+        displayResult(lastNum || "??", { id: "-", dept: "-", name: "未登録" }, "alert");
     }
     isProcessing = false;
+}
+
+function displayResult(plate, data, type) {
+    infoDisplay.style.display = "block";
+    document.getElementById('res-plate').innerText = plate;
+    document.getElementById('res-id').innerText = data.id;
+    document.getElementById('res-dept').innerText = data.dept;
+    document.getElementById('res-name').innerText = data.name;
+    
+    statusDiv.innerText = type === "match" ? "【照合一致】" : "【未登録】";
+    addHistory(plate, data, type);
+    speak(data.name);
+}
+
+function addHistory(num, data, type) {
+    const card = document.createElement('div');
+    card.className = `card ${type}`;
+    card.innerHTML = `
+        <div><b>${num}</b> : ${data.name} <small>(${data.dept})</small></div>
+        <div style="font-size:11px; color:#999;">${new Date().toLocaleTimeString()}</div>
+    `;
+    historyItems.prepend(card);
+    if (historyItems.children.length > 10) historyItems.lastChild.remove();
 }
 
 function speak(t) {
