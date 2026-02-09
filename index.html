@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合システム（最終安定版）</title>
+    <title>車両照合システム（最終形態）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #000; color: #fff; margin: 0; overflow: hidden; }
@@ -12,8 +12,7 @@
         #focus-guide { 
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
             width: 80vw; height: 35vw; border: 4px solid #00FF00; border-radius: 12px;
-            box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.6); pointer-events: none;
-            z-index: 10;
+            box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.6); pointer-events: none; z-index: 10;
         }
         #ui-panel { height: 40vh; background: #f8f9fa; color: #333; padding: 15px; box-sizing: border-box; }
         #status { font-weight: bold; color: #007AFF; margin-bottom: 5px; font-size: 14px; }
@@ -28,16 +27,13 @@
     </style>
 </head>
 <body>
-
     <div id="camera-container">
         <video id="video" autoplay playsinline></video>
         <div id="focus-guide"></div>
     </div>
-    
     <button id="shutter" class="shutter-btn"></button>
-
     <div id="ui-panel">
-        <div id="status">枠の中央に数字を合わせてタップ</div>
+        <div id="status">枠内に合わせてタップ（3枚連射解析）</div>
         <div id="res-plate">----</div>
         <div id="res-info"></div>
     </div>
@@ -49,6 +45,7 @@ const statusDiv = document.getElementById('status');
 const plateDiv = document.getElementById('res-plate');
 const infoDiv = document.getElementById('res-info');
 
+// ここが名簿です。後でスプレッドシート連携に置き換え可能です。
 const employeeList = [
     { plate: "5395", name: "芳岡 博史" },
     { plate: "1129", name: "大橋 隆幸" },
@@ -69,17 +66,14 @@ async function startCamera() {
 }
 
 function findEmployee(detectedNum) {
-    // 読取値の全パターンを試す（そのまま、頭の1文字消去、頭の0消去）
-    const candidates = [
-        detectedNum.replace(/[^0-9]/g, ''),
-        detectedNum.replace(/[^0-9]/g, '').substring(1),
-        detectedNum.replace(/[^0-9]/g, '').replace(/^0+/, '')
-    ];
+    if (!detectedNum) return null;
+    const numOnly = detectedNum.replace(/[^0-9]/g, '');
+    const candidates = [numOnly, numOnly.substring(1), numOnly.replace(/^0+/, '')];
 
     for (const val of candidates) {
         if (!val) continue;
         for (const emp of employeeList) {
-            if (val === emp.plate || isSimilar(val, emp.plate)) {
+            if (val === emp.plate || (val.length === emp.plate.length && isSimilar(val, emp.plate))) {
                 return emp;
             }
         }
@@ -88,56 +82,58 @@ function findEmployee(detectedNum) {
 }
 
 function isSimilar(s1, s2) {
-    if (!s1 || !s2 || Math.abs(s1.length - s2.length) > 1) return false;
     let diff = 0;
-    const len = Math.max(s1.length, s2.length);
-    for (let i = 0; i < len; i++) { if (s1[i] !== s2[i]) diff++; }
+    for (let i = 0; i < s1.length; i++) { if (s1[i] !== s2[i]) diff++; }
     return diff <= 1;
 }
 
-async function takePhoto() {
-    if (isProcessing) return;
-    isProcessing = true;
-    statusDiv.innerText = "解析中...";
-    infoDiv.innerText = "";
-
+// 単一画像の解析
+async function processFrame() {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     const vW = video.videoWidth;
     const vH = video.videoHeight;
-
-    const frameW = vW * 0.85; 
-    const frameH = vW * 0.38; 
-    const startX = (vW - frameW) / 2;
-    const startY = (vH - frameH) / 2;
-
-    canvas.width = 800;
-    canvas.height = 360;
-    
-    // 【調整】コントラストを適正化し、明るさを少し抑えて白飛びを防止
+    const frameW = vW * 0.82; 
+    const frameH = vW * 0.35; 
+    canvas.width = 800; canvas.height = 350;
     ctx.filter = "contrast(180%) grayscale(100%) brightness(95%)";
-    ctx.drawImage(video, startX, startY, frameW, frameH, 0, 0, 800, 360);
+    ctx.drawImage(video, (vW-frameW)/2, (vH-frameH)/2, frameW, frameH, 0, 0, 800, 350);
 
-    try {
-        const result = await Tesseract.recognize(canvas, 'eng', {
-            tessedit_char_whitelist: '0123456789',
-            tessedit_pageseg_mode: '8' // 単一単語（数字の塊）として認識
-        });
-        
-        let target = result.data.text.replace(/[^0-9]/g, '');
-        plateDiv.innerText = target || "??";
+    const result = await Tesseract.recognize(canvas, 'eng', {
+        tessedit_char_whitelist: '0123456789',
+        tessedit_pageseg_mode: '8'
+    });
+    return result.data.text.replace(/[^0-9]/g, '');
+}
 
-        const match = findEmployee(target);
-        if (match) {
-            plateDiv.innerText = match.plate;
-            infoDiv.innerText = match.name;
-            statusDiv.innerText = "照合一致";
-            speak(match.name);
-        } else {
-            statusDiv.innerText = "未登録 (" + target + ")";
-        }
-    } catch (e) { statusDiv.innerText = "エラー"; }
-    finally { isProcessing = false; }
+// 3回リトライ解析
+async function takePhoto() {
+    if (isProcessing) return;
+    isProcessing = true;
+    statusDiv.innerText = "解析中 (3連射)...";
+    
+    let finalMatch = null;
+    let lastNum = "";
+
+    for (let i = 0; i < 3; i++) {
+        statusDiv.innerText = `解析中 (${i+1}/3枚目)...`;
+        const num = await processFrame();
+        lastNum = num;
+        finalMatch = findEmployee(num);
+        if (finalMatch) break; // 一致したら即終了
+        await new Promise(r => setTimeout(r, 200)); // 0.2秒待って次を撮る
+    }
+
+    if (finalMatch) {
+        plateDiv.innerText = finalMatch.plate;
+        infoDiv.innerText = finalMatch.name;
+        statusDiv.innerText = "照合一致";
+        speak(finalMatch.name);
+    } else {
+        plateDiv.innerText = lastNum || "??";
+        statusDiv.innerText = "未登録 (" + lastNum + ")";
+    }
+    isProcessing = false;
 }
 
 function speak(t) {
