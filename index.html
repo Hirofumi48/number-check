@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合システム（高精度画像比較版）</title>
+    <title>車両照合システム（高精度安定版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding: 0; padding-bottom: 50px; }
@@ -19,9 +19,6 @@
         .info-table { width: 100%; border-collapse: collapse; }
         .info-table th, .info-table td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 15px; }
         .res-plate-num { font-size: 26px; font-weight: bold; color: #007AFF; }
-        #history-area { margin: 15px; text-align: left; }
-        .card { background: white; padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 8px solid #ccc; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .card.match { border-left-color: #28a745; }
         button { padding: 18px 40px; font-size: 18px; cursor: pointer; background: #007AFF; color: white; border: none; border-radius: 30px; font-weight: bold; margin-top: 10px; }
     </style>
 </head>
@@ -33,19 +30,16 @@
     </div>
     
     <div id="result-container">
-        <div id="status">「スキャン開始」をタップしてください</div>
+        <div id="status">「スキャン開始」をタップ</div>
         <div id="info-display" style="display:none;">
-            <div id="counter" style="color:#007AFF; font-size:12px;"></div>
             <table class="info-table">
                 <tr><th>ナンバー</th><td id="res-plate" class="res-plate-num"></td></tr>
                 <tr><th>氏名</th><td id="res-name"></td></tr>
                 <tr><th>部署</th><td id="res-dept"></td></tr>
-                <tr><th>社員番号</th><td id="res-id"></td></tr>
             </table>
         </div>
     </div>
-
-    <div id="history-area"><div id="history-items"></div></div>
+    <div id="history-items" style="padding:10px;"></div>
     <p><button id="startBtn">スキャン開始</button></p>
 
 <script>
@@ -55,7 +49,6 @@ const infoDisplay = document.getElementById('info-display');
 const historyItems = document.getElementById('history-items');
 const startBtn = document.getElementById('startBtn');
 
-// 社員リスト（維持）
 const employeeList = {
     "5395": [{ id: "59279", dept: "生産技術", name: "芳岡 博史" }],
     "1129": [{ id: "55555", dept: "第2生産部", name: "大橋 隆幸" }],
@@ -81,30 +74,32 @@ const tempNames = {
     'dot':'num_dot.jpg', 'hyphen':'num_hyphen.jpg'
 };
 
+// 画像の読み込みを待つプロミス
 function loadTemplates() {
-    Object.keys(tempNames).forEach(key => {
-        const img = new Image();
-        img.src = tempNames[key];
-        templates[key] = img;
+    const promises = Object.keys(tempNames).map(key => {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => { templates[key] = img; resolve(); };
+            img.onerror = reject;
+            img.src = tempNames[key];
+        });
     });
+    return Promise.all(promises);
 }
 
-let lastDetected = ""; 
-let lastTime = 0;
 let isProcessing = false;
 
-// テンプレートマッチング（画像の差分計算）
-function compareImages(canvasChar, templateImg) {
-    const tempCanvas = document.createElement('canvas');
-    const tCtx = tempCanvas.getContext('2d');
-    tempCanvas.width = 20; tempCanvas.height = 40;
+function compareImages(charCanvas, templateImg) {
+    const tCanvas = document.createElement('canvas');
+    tCanvas.width = 20; tCanvas.height = 40;
+    const tCtx = tCanvas.getContext('2d');
     tCtx.drawImage(templateImg, 0, 0, 20, 40);
+    
     const tData = tCtx.getImageData(0, 0, 20, 40).data;
-    const cData = canvasChar.getContext('2d').getImageData(0, 0, 20, 40).data;
+    const cData = charCanvas.getContext('2d').getImageData(0, 0, 20, 40).data;
     
     let diff = 0;
     for (let i = 0; i < tData.length; i += 4) {
-        // 白黒の差を累計
         diff += Math.abs(tData[i] - cData[i]);
     }
     return diff;
@@ -113,78 +108,59 @@ function compareImages(canvasChar, templateImg) {
 async function scan() {
     if (isProcessing) return;
     isProcessing = true;
+    statusDiv.innerText = "解析中...";
 
     const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
     const vW = video.videoWidth;
     const vH = video.videoHeight;
-    const cW = vW * 0.8;
-    const cH = cW * 0.5;
-    canvas.width = cW;
-    canvas.height = cH;
-    
+    canvas.width = vW * 0.8;
+    canvas.height = canvas.width * 0.5;
+    const ctx = canvas.getContext('2d');
     ctx.filter = "contrast(150%) grayscale(100%)";
-    ctx.drawImage(video, (vW - cW)/2, (vH - cH)/2, cW, cH, 0, 0, cW, cH);
+    ctx.drawImage(video, (vW - canvas.width)/2, (vH - canvas.height)/2, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
 
     try {
         const result = await Tesseract.recognize(canvas, 'eng', { tessedit_char_whitelist: '0123456789-.' });
-        const symbols = result.data.symbols;
         let finalStr = "";
 
-        for (let sym of symbols) {
-            let bestMatch = sym.text;
+        for (let sym of result.data.symbols) {
             let minDiff = Infinity;
+            let bestChar = sym.text;
 
             const charCanvas = document.createElement('canvas');
             charCanvas.width = 20; charCanvas.height = 40;
             const b = sym.bbox;
-            // OCRが検知した各文字の場所を切り出し
             charCanvas.getContext('2d').drawImage(canvas, b.x0, b.y0, b.x1-b.x0, b.y1-b.y0, 0, 0, 20, 40);
 
-            // 手持ちの全画像と比較
             Object.keys(templates).forEach(key => {
                 const diff = compareImages(charCanvas, templates[key]);
                 if (diff < minDiff) {
                     minDiff = diff;
-                    // 一致したキーを文字に変換
-                    bestMatch = (key === 'dot' ? '' : (key === 'hyphen' ? '-' : key));
+                    bestChar = (key === 'dot' ? '' : (key === 'hyphen' ? '-' : key));
                 }
             });
-            finalStr += bestMatch;
+            finalStr += bestChar;
         }
 
         const cleanNum = finalStr.replace(/[^\d]/g, '');
-        if (cleanNum) processNumber(cleanNum);
-
-    } catch (e) { console.error(e); }
+        if (employeeList[cleanNum]) {
+            displayMatch(cleanNum, employeeList[cleanNum][0]);
+        } else {
+            statusDiv.innerText = "スキャン中... (未登録: " + cleanNum + ")";
+        }
+    } catch (e) {
+        console.error(e);
+        statusDiv.innerText = "エラー発生";
+    }
     isProcessing = false;
 }
 
-function processNumber(num) {
-    const now = Date.now();
-    const dataArray = employeeList[num];
-    if (dataArray) {
-        if (num === lastDetected && (now - lastTime) < 5000) return;
-        lastDetected = num; lastTime = now;
-        dataArray.forEach((data, i) => {
-            setTimeout(() => displayMatch(num, data, i + 1, dataArray.length), i * 2500);
-        });
-    }
-}
-
-function displayMatch(plate, data, cur, tot) {
+function displayMatch(plate, data) {
     infoDisplay.style.display = "block";
-    document.getElementById('counter').innerText = tot > 1 ? `【該当 ${tot}件】 ${cur}/${tot}` : "";
     document.getElementById('res-plate').innerText = plate;
     document.getElementById('res-name').innerText = data.name;
     document.getElementById('res-dept').innerText = data.dept;
-    document.getElementById('res-id').innerText = data.id;
-    statusDiv.innerText = "照合一致: " + plate;
-    
-    const card = document.createElement('div');
-    card.className = "card match";
-    card.innerHTML = `<div><b>${plate}</b>: ${data.name}</div><small>${new Date().toLocaleTimeString()}</small>`;
-    historyItems.prepend(card);
+    statusDiv.innerText = "照合一致！";
     speak(data.name);
 }
 
@@ -194,17 +170,17 @@ function speak(t) {
     speechSynthesis.speak(s);
 }
 
-startBtn.onclick = () => {
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280, height: 720 } })
-        .then(stream => {
-            video.srcObject = stream;
-            loadTemplates();
-            setInterval(scan, 3000);
-            startBtn.style.display = "none";
-            statusDiv.innerText = "スキャン中...";
-        }).catch(err => {
-            alert("カメラを起動できませんでした。ブラウザの設定を確認してください。");
-        });
+startBtn.onclick = async () => {
+    try {
+        statusDiv.innerText = "画像読み込み中...";
+        await loadTemplates();
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        video.srcObject = stream;
+        startBtn.style.display = "none";
+        setInterval(scan, 3000);
+    } catch (err) {
+        alert("準備失敗: 画像ファイルが同じフォルダにあるか確認してください");
+    }
 };
 </script>
 </body>
