@@ -3,27 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合システム（完成版）</title>
+    <title>車両照合システム（枠同期・高精度版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #000; color: white; margin: 0; overflow: hidden; }
-        #camera-container { position: relative; width: 100vw; height: 60vh; }
+        body { font-family: sans-serif; text-align: center; background: #000; color: #fff; margin: 0; overflow: hidden; }
+        #camera-container { position: relative; width: 100vw; height: 60vh; background: #000; }
         #video { width: 100%; height: 100%; object-fit: cover; }
+        
+        /* 緑の枠：ここに入れたものだけを解析します */
         #focus-guide { 
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
-            width: 80vw; height: 32vw; border: 3px solid #00FF00; border-radius: 12px;
+            width: 70vw; height: 30vw; border: 4px solid #00FF00; border-radius: 8px;
             box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.6); pointer-events: none;
+            z-index: 10;
         }
-        #ui-panel { height: 40vh; background: #fff; color: #333; padding: 15px; box-sizing: border-box; }
+
+        #ui-panel { height: 40vh; background: #f8f9fa; color: #333; padding: 15px; box-sizing: border-box; }
         #status { font-weight: bold; color: #007AFF; margin-bottom: 5px; font-size: 14px; }
-        #res-plate { font-size: 48px; font-weight: bold; letter-spacing: 4px; margin: 0; color: #111; line-height: 1.2; }
-        #res-info { font-size: 24px; font-weight: bold; color: #d32f2f; margin-top: 5px; }
+        #res-plate { font-size: 44px; font-weight: bold; letter-spacing: 4px; margin: 0; color: #111; }
+        #res-info { font-size: 22px; font-weight: bold; color: #d32f2f; margin-top: 5px; }
+        
         .shutter-btn { 
-            width: 85px; height: 85px; background: #fff; border: 6px solid #007AFF; 
-            border-radius: 50%; margin: -45px auto 0; position: relative; z-index: 100;
+            width: 80px; height: 80px; background: #fff; border: 6px solid #007AFF; 
+            border-radius: 50%; margin: -40px auto 0; position: relative; z-index: 100;
             display: block; box-shadow: 0 4px 15px rgba(0,0,0,0.4); outline: none;
         }
-        .shutter-btn:active { background: #007AFF; transform: scale(0.95); }
+        .shutter-btn:active { background: #007AFF; }
     </style>
 </head>
 <body>
@@ -36,7 +41,7 @@
     <button id="shutter" class="shutter-btn"></button>
 
     <div id="ui-panel">
-        <div id="status">ナンバーを下半分に合わせてタップ</div>
+        <div id="status">大きな数字を枠いっぱいに合わせてタップ</div>
         <div id="res-plate">----</div>
         <div id="res-info"></div>
     </div>
@@ -54,23 +59,31 @@ const employeeList = [
     { plate: "90", name: "テスト90番" },
     { plate: "582", name: "テスト582番" },
     { plate: "5678", name: "テスト5678番" },
-    { plate: "1234", name: "テスト1234番" },
-    { plate: "1122", name: "佐藤 花子" }
+    { plate: "1234", name: "テスト1234番" }
 ];
 
 let isProcessing = false;
 
 async function startCamera() {
-    const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: "environment", width: 1280 } 
-    });
-    video.srcObject = stream;
+    // 解像度を1280x720に固定して計算のズレをなくす
+    const constraints = {
+        video: { 
+            facingMode: "environment",
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+        }
+    };
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+    } catch (err) {
+        statusDiv.innerText = "カメラ起動エラー";
+    }
 }
 
 function findEmployee(detectedNum) {
     const cleanDetected = detectedNum.replace(/^0+/, '');
     if (!cleanDetected) return null;
-
     for (const emp of employeeList) {
         if (cleanDetected === emp.plate || isSimilar(cleanDetected, emp.plate)) {
             return emp;
@@ -97,16 +110,24 @@ async function takePhoto() {
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
-    canvas.width = 800; canvas.height = 400;
-    
-    // 【重要】上半分をカットし、下段の大きな数字だけを狙う
-    const cropX = video.videoWidth * 0.15;
-    const cropY = video.videoHeight * 0.45; // 少し下げて上段の300を回避
-    const cropW = video.videoWidth * 0.7;
-    const cropH = video.videoHeight * 0.25; // 高さを絞って地名を回避
 
-    ctx.filter = "contrast(250%) grayscale(100%) brightness(90%)";
-    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, 800, 400);
+    // ビデオの実際の解像度を取得
+    const vW = video.videoWidth;
+    const vH = video.videoHeight;
+
+    // 画面上の緑の枠（70vw x 30vw）に対応するピクセル範囲を計算
+    // object-fit: cover を考慮した切り抜き
+    const frameW = vW * 0.7; 
+    const frameH = vW * 0.3; // 幅基準で高さを計算
+    const startX = (vW - frameW) / 2;
+    const startY = (vH - frameH) / 2;
+
+    canvas.width = 600;
+    canvas.height = 250;
+    
+    ctx.filter = "contrast(200%) grayscale(100%) brightness(95%)";
+    // 緑の枠内だけをきれいに切り抜く
+    ctx.drawImage(video, startX, startY, frameW, frameH, 0, 0, 600, 250);
 
     try {
         const result = await Tesseract.recognize(canvas, 'eng', {
@@ -114,7 +135,7 @@ async function takePhoto() {
         });
         
         let target = result.data.text.replace(/[^0-9]/g, '');
-        // 4桁以上読めた場合は後ろから4桁を採用
+        // 4桁以上の場合は後ろから4桁（念のための保険）
         if (target.length > 4) target = target.slice(-4);
         
         plateDiv.innerText = target || "??";
@@ -123,7 +144,7 @@ async function takePhoto() {
         if (match) {
             plateDiv.innerText = match.plate;
             infoDiv.innerText = match.name;
-            statusDiv.innerText = "照合成功";
+            statusDiv.innerText = "照合一致";
             speak(match.name);
         } else {
             statusDiv.innerText = "未登録 (" + target + ")";
