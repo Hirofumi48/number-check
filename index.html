@@ -69,44 +69,63 @@ function getSimilarity(s1, s2) {
     return matches;
 }
 
-async function takePhoto() {
+async function scan() {
+    if (isProcessing) return;
+    isProcessing = true;
     statusDiv.innerText = "解析中...";
+
     const canvas = document.createElement('canvas');
-    canvas.width = 600; canvas.height = 300;
     const ctx = canvas.getContext('2d');
+    const vW = video.videoWidth;
+    const vH = video.videoHeight;
+    canvas.width = 600; canvas.height = 300;
     
-    // ガイド枠の部分だけを切り抜く
-    ctx.filter = "contrast(150%) grayscale(100%)";
-    ctx.drawImage(video, (video.videoWidth-1200)/2, (video.videoHeight-600)/2, 1200, 600, 0, 0, 600, 300);
+    // ガイド枠内を白黒・高コントラスト化
+    ctx.filter = "contrast(200%) grayscale(100%)";
+    ctx.drawImage(video, (vW-1200)/2, (vH-600)/2, 1200, 600, 0, 0, 600, 300);
 
     try {
         const result = await Tesseract.recognize(canvas, 'eng', {
             tessedit_char_whitelist: '0123456789'
         });
         
-        const rawNum = result.data.text.replace(/[^0-9]/g, '');
-        plateDiv.innerText = rawNum || "不明";
+        // 全体の数字を取得
+        let fullText = result.data.text.replace(/[^0-9]/g, '');
+        
+        // 【対策1】後ろから4文字をターゲットにする（例：3005395 → 5395）
+        let targetNum = fullText.slice(-4); 
+        statusDiv.innerText = "読取: " + fullText + " (抽出: " + targetNum + ")";
 
-        // あいまい検索：4桁のうち3桁以上合っていれば候補とする
-        let bestMatch = null;
-        employeeList.forEach(emp => {
-            if (rawNum.includes(emp.plate) || getSimilarity(rawNum, emp.plate) >= 3) {
-                bestMatch = emp;
+        let matchFound = false;
+        
+        // 【対策2】あいまい照合（1文字違いまでOKにする）
+        for (let key in employeeList) {
+            if (isSimilar(targetNum, key)) {
+                displayMatch(key, employeeList[key]);
+                matchFound = true;
+                break;
             }
-        });
-
-        if (bestMatch) {
-            statusDiv.innerText = "照合一致！";
-            infoDiv.innerHTML = `<b>${bestMatch.name}</b> (${bestMatch.dept})`;
-            speak(bestMatch.name);
-        } else {
-            statusDiv.innerText = "未登録、または読み取り失敗";
-            infoDiv.innerText = "";
         }
-    } catch (e) {
-        statusDiv.innerText = "エラー発生";
-    }
+
+        if (!matchFound) {
+            statusDiv.innerText = "一致なし (" + targetNum + ")";
+        }
+
+    } catch (e) { console.error(e); }
+    isProcessing = false;
 }
+
+// あいまい判定関数：4文字中3文字以上合っていればOK
+function isSimilar(detected, master) {
+    if (detected === master) return true;
+    if (detected.length !== master.length) return false;
+    let diffCount = 0;
+    for (let i = 0; i < master.length; i++) {
+        if (detected[i] !== master[i]) diffCount++;
+    }
+    return diffCount <= 1; // 1文字違いなら「正解」とみなす
+}
+    
 
 function speak(t) {
     const s = new SpeechSynthesisUtterance(t);
