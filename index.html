@@ -1,9 +1,17 @@
+申し訳ありません、コードが混ざってしまい起動しなくなっていましたね。
+
+原因は、ボタンを押した時に動くはずの関数名が takePhoto になっていたり、実際の解析処理が scan という名前だったりと、名前の不一致が起きていたためです。
+
+これまでの試行錯誤をふまえ、**「後ろから4桁を抜き出す」「1文字間違いを許容する」「ボタンを押して解析する」**という機能をすべて統合し、そのままコピー＆ペーストで動く完全版を作成しました。
+
+車両照合システム（完成版フルコード）
+HTML
 <!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合システム（確実スキャン版）</title>
+    <title>車両照合システム</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #000; color: white; margin: 0; overflow: hidden; }
@@ -12,17 +20,18 @@
         #focus-guide { 
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
             width: 70vw; height: 25vw; border: 2px solid #00FF00; border-radius: 10px;
-            box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.5); pointer-events: none;
         }
         #ui-panel { height: 40vh; background: #f0f0f0; color: #333; padding: 20px; box-sizing: border-box; }
-        #status { font-weight: bold; margin-bottom: 10px; color: #007AFF; }
-        #res-plate { font-size: 32px; font-weight: bold; letter-spacing: 5px; margin: 10px 0; }
+        #status { font-weight: bold; margin-bottom: 5px; color: #007AFF; min-height: 1.2em; }
+        #res-plate { font-size: 36px; font-weight: bold; letter-spacing: 5px; margin: 5px 0; color: #333; }
+        #res-info { font-size: 20px; font-weight: bold; color: #d32f2f; }
         .shutter-btn { 
             width: 80px; height: 80px; background: white; border: 5px solid #007AFF; 
-            border-radius: 50%; margin-top: -40px; position: relative; z-index: 100;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            border-radius: 50%; margin: -40px auto 0; position: relative; z-index: 100;
+            display: block; outline: none;
         }
-        .shutter-btn:active { background: #ddd; }
+        .shutter-btn:active { background: #007AFF; }
     </style>
 </head>
 <body>
@@ -35,9 +44,9 @@
     <button id="shutter" class="shutter-btn"></button>
 
     <div id="ui-panel">
-        <div id="status">枠内にナンバーを合わせてボタンをタップ</div>
+        <div id="status">枠内に合わせてボタンをタップ</div>
         <div id="res-plate">----</div>
-        <div id="res-info" style="font-size: 18px;"></div>
+        <div id="res-info"></div>
     </div>
 
 <script>
@@ -47,42 +56,67 @@ const statusDiv = document.getElementById('status');
 const plateDiv = document.getElementById('res-plate');
 const infoDiv = document.getElementById('res-info');
 
-// 社員リスト
+// 社員リスト（マスターデータ）
 const employeeList = [
     { plate: "5395", dept: "生産技術", name: "芳岡 博史" },
     { plate: "1129", dept: "第2生産部", name: "大橋 隆幸" },
+    { plate: "1209", dept: "なし", name: "森川" },
+    { plate: "2011", dept: "なし", name: "小山" },
+    { plate: "6523", dept: "なし", name: "村山" },
+    { plate: "1040", dept: "品質管理本部", name: "野間 健太郎" },
+    { plate: "4433", dept: "生産技術部", name: "山形 基生" },
+    { plate: "717", dept: "品質管理部", name: "廣瀬 真紀" },
+    { plate: "6621", dept: "第1生産部", name: "安田" },
+    { plate: "2055", dept: "総務部", name: "山下 隆生" },
+    { plate: "61", dept: "企画部", name: "田中 茂樹" },
     { plate: "1122", dept: "総務部", name: "佐藤 花子" }
-    // ... 必要に応じて追加
 ];
 
+let isProcessing = false;
+
+// カメラ起動
 async function startCamera() {
-    const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: "environment", width: 1280 } 
-    });
-    video.srcObject = stream;
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: "environment", width: 1280 } 
+        });
+        video.srcObject = stream;
+    } catch (err) {
+        statusDiv.innerText = "カメラの起動に失敗しました";
+    }
 }
 
-// 2つの文字列がどれくらい似ているか（編集距離）
-function getSimilarity(s1, s2) {
-    let matches = 0;
-    for(let i=0; i<s1.length; i++) { if(s2.includes(s1[i])) matches++; }
-    return matches;
+// あいまい判定関数：4文字中3文字以上合っていればOKとする
+function isSimilar(detected, master) {
+    if (detected === master) return true;
+    if (detected.length !== master.length) return false;
+    let diffCount = 0;
+    for (let i = 0; i < master.length; i++) {
+        if (detected[i] !== master[i]) diffCount++;
+    }
+    return diffCount <= 1; 
 }
 
-async function scan() {
+// 解析処理
+async function takePhoto() {
     if (isProcessing) return;
     isProcessing = true;
+    
     statusDiv.innerText = "解析中...";
+    infoDiv.innerText = "";
+    plateDiv.innerText = "....";
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
+    
+    // カメラ映像からガイド枠付近を切り抜き
     const vW = video.videoWidth;
     const vH = video.videoHeight;
     canvas.width = 600; canvas.height = 300;
     
-    // ガイド枠内を白黒・高コントラスト化
-    ctx.filter = "contrast(200%) grayscale(100%)";
-    ctx.drawImage(video, (vW-1200)/2, (vH-600)/2, 1200, 600, 0, 0, 600, 300);
+    ctx.filter = "contrast(180%) grayscale(100%)";
+    // 中央部分をクロップして描画
+    ctx.drawImage(video, (vW * 0.15), (vH * 0.35), (vW * 0.7), (vH * 0.3), 0, 0, 600, 300);
 
     try {
         const result = await Tesseract.recognize(canvas, 'eng', {
@@ -92,40 +126,33 @@ async function scan() {
         // 全体の数字を取得
         let fullText = result.data.text.replace(/[^0-9]/g, '');
         
-        // 【対策1】後ろから4文字をターゲットにする（例：3005395 → 5395）
+        // 後ろから4文字をターゲットにする（分類番号対策）
         let targetNum = fullText.slice(-4); 
-        statusDiv.innerText = "読取: " + fullText + " (抽出: " + targetNum + ")";
+        plateDiv.innerText = targetNum || "読み取れず";
 
-        let matchFound = false;
-        
-        // 【対策2】あいまい照合（1文字違いまでOKにする）
-        for (let key in employeeList) {
-            if (isSimilar(targetNum, key)) {
-                displayMatch(key, employeeList[key]);
-                matchFound = true;
+        let found = false;
+        for (const emp of employeeList) {
+            if (isSimilar(targetNum, emp.plate)) {
+                plateDiv.innerText = emp.plate; // 正しい番号に補正表示
+                infoDiv.innerHTML = `${emp.name} (${emp.dept})`;
+                statusDiv.innerText = "照合一致！";
+                speak(emp.name);
+                found = true;
                 break;
             }
         }
 
-        if (!matchFound) {
-            statusDiv.innerText = "一致なし (" + targetNum + ")";
+        if (!found) {
+            statusDiv.innerText = targetNum.length > 0 ? "未登録の番号です" : "数字を認識できませんでした";
         }
 
-    } catch (e) { console.error(e); }
-    isProcessing = false;
-}
-
-// あいまい判定関数：4文字中3文字以上合っていればOK
-function isSimilar(detected, master) {
-    if (detected === master) return true;
-    if (detected.length !== master.length) return false;
-    let diffCount = 0;
-    for (let i = 0; i < master.length; i++) {
-        if (detected[i] !== master[i]) diffCount++;
+    } catch (e) {
+        console.error(e);
+        statusDiv.innerText = "解析エラーが発生しました";
+    } finally {
+        isProcessing = false;
     }
-    return diffCount <= 1; // 1文字違いなら「正解」とみなす
 }
-    
 
 function speak(t) {
     const s = new SpeechSynthesisUtterance(t);
@@ -133,6 +160,7 @@ function speak(t) {
     speechSynthesis.speak(s);
 }
 
+// イベント設定
 shutter.onclick = takePhoto;
 window.onload = startCamera;
 </script>
