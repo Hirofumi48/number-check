@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（手入力復旧版）</title>
+    <title>車両照合（重複ナンバー対応版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -30,13 +30,16 @@
         .file-input-label { background: #34c759; color: white; padding: 8px 16px; border-radius: 8px; cursor: pointer; display: inline-block; font-weight: bold; font-size: 13px; }
         #fileInput { display: none; }
 
-        #result-container { margin: 10px 15px; min-height: 160px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); text-align: left; }
+        #result-container { margin: 10px 15px; min-height: 100px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); text-align: left; }
         #status { font-size: 14px; color: #007AFF; margin-bottom: 10px; font-weight: bold; text-align: center; background: #eef; padding: 5px; border-radius: 4px; }
         
+        .match-group { border-bottom: 2px dashed #eee; padding-bottom: 10px; margin-bottom: 10px; }
+        .match-group:last-child { border-bottom: none; }
         .info-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
-        .info-table th, .info-table td { border: 1px solid #ddd; padding: 10px; font-size: 16px; }
+        .info-table th, .info-table td { border: 1px solid #ddd; padding: 8px; font-size: 15px; }
         .info-table th { background-color: #f8f8f8; width: 30%; color: #555; }
-        .res-plate-num { font-size: 28px; font-weight: bold; color: #007AFF; }
+        .res-plate-num { font-size: 24px; font-weight: bold; color: #007AFF; }
+        .multi-tag { background: orange; color: white; font-size: 10px; padding: 2px 6px; border-radius: 10px; vertical-align: middle; margin-left: 5px; }
 
         #history-area { margin: 15px; text-align: left; }
         .history-label { font-size: 13px; color: #666; font-weight: bold; margin-bottom: 8px; padding-left: 5px; }
@@ -67,14 +70,7 @@
 
     <div id="result-container">
         <div id="status">名簿を読込後、開始してください</div>
-        <div id="info-display" style="display:none;">
-            <table class="info-table">
-                <tr><th>ナンバー</th><td id="res-plate" class="res-plate-num"></td></tr>
-                <tr><th>社員番号</th><td id="res-id"></td></tr>
-                <tr><th>部署</th><td id="res-dept"></td></tr>
-                <tr><th>氏名</th><td id="res-name"></td></tr>
-            </table>
-        </div>
+        <div id="info-display"></div>
     </div>
 
     <div id="history-area">
@@ -95,7 +91,6 @@ const fileStatus = document.getElementById('file-status');
 let employeeList = []; 
 let isProcessing = false;
 
-// CSV読み込み
 fileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -121,48 +116,41 @@ fileInput.addEventListener('change', (e) => {
 });
 
 async function startCamera() {
-    // 既存のストリームがある場合は一度停止させる
-    if (video.srcObject) {
-        video.srcObject.getTracks().forEach(track => track.stop());
-    }
-    const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: "environment", width: { ideal: 1280 } } 
-    });
+    if (video.srcObject) { video.srcObject.getTracks().forEach(track => track.stop()); }
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 } } });
     video.srcObject = stream;
-    // iOSでのフリーズ対策としてplayを明示的に呼ぶ
     video.play();
 }
 
-// 手入力機能
 manualBtn.onclick = async () => {
     if (employeeList.length === 0) return alert("先に名簿を読み込んでください");
-    
-    // 入力画面（ここでカメラが止まることがある）
-    const num = prompt("ナンバーを入力してください（数字のみ）");
-    
-    // 入力画面が閉じた後、カメラを「再起動」してフリーズを防ぐ
+    const num = prompt("ナンバーを入力してください");
     await startCamera();
-
     if (num) {
-        const match = findEmployee(num);
-        if (match) {
-            displayResult(match.plate, match, "match");
+        const matches = findAllMatches(num);
+        if (matches.length > 0) {
+            displayResults(num, matches, "match");
         } else {
-            displayResult(num, { id: "-", dept: "-", name: "未登録" }, "alert");
+            displayResults(num, [{ id: "-", dept: "-", name: "未登録" }], "alert");
         }
     }
 };
 
-function findEmployee(detectedNum) {
-    if (!detectedNum || employeeList.length === 0) return null;
+function findAllMatches(detectedNum) {
+    if (!detectedNum || employeeList.length === 0) return [];
     const numOnly = detectedNum.replace(/[^0-9]/g, '');
     const candidates = [numOnly, numOnly.substring(1), numOnly.replace(/^0+/, '')];
+    
+    let allFound = [];
     for (const val of candidates) {
         if (!val) continue;
-        const match = employeeList.find(emp => emp.plate === val || (val.length === emp.plate.length && isSimilar(val, emp.plate)));
-        if (match) return match;
+        const found = employeeList.filter(emp => emp.plate === val || (val.length === emp.plate.length && isSimilar(val, emp.plate)));
+        if (found.length > 0) {
+            allFound = found;
+            break; 
+        }
     }
-    return null;
+    return allFound;
 }
 
 function isSimilar(s1, s2) {
@@ -174,10 +162,8 @@ function isSimilar(s1, s2) {
 async function processFrame() {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
-    const vW = video.videoWidth;
-    const vH = video.videoHeight;
-    const frameW = vW * 0.8; 
-    const frameH = vW * 0.4;
+    const vW = video.videoWidth; const vH = video.videoHeight;
+    const frameW = vW * 0.8; const frameH = vW * 0.4;
     canvas.width = 800; canvas.height = 400;
     ctx.filter = "contrast(180%) grayscale(100%) brightness(95%)";
     ctx.drawImage(video, (vW-frameW)/2, (vH-frameH)/2, frameW, frameH, 0, 0, 800, 400);
@@ -189,51 +175,64 @@ async function takePhoto() {
     if (isProcessing) return;
     if (employeeList.length === 0) return alert("名簿CSVを選択してください");
     isProcessing = true;
-    statusDiv.innerText = "解析中 (3連射)...";
-    statusDiv.style.color = "#007AFF";
-    statusDiv.style.backgroundColor = "#eef";
+    statusDiv.innerText = "解析中...";
+    statusDiv.style.color = "#007AFF"; statusDiv.style.backgroundColor = "#eef";
     
-    let finalMatch = null;
+    let finalMatches = [];
     let lastNum = "";
     for (let i = 0; i < 3; i++) {
         const num = await processFrame();
         lastNum = num;
-        finalMatch = findEmployee(num);
-        if (finalMatch) break;
+        finalMatches = findAllMatches(num);
+        if (finalMatches.length > 0) break;
         await new Promise(r => setTimeout(r, 150));
     }
-    if (finalMatch) {
-        displayResult(finalMatch.plate, finalMatch, "match");
+    if (finalMatches.length > 0) {
+        displayResults(finalMatches[0].plate, finalMatches, "match");
     } else {
-        displayResult(lastNum || "??", { id: "-", dept: "-", name: "未登録" }, "alert");
+        displayResults(lastNum || "??", [{ id: "-", dept: "-", name: "未登録" }], "alert");
     }
     isProcessing = false;
 }
 
-function displayResult(plate, data, type) {
-    infoDisplay.style.display = "block";
-    document.getElementById('res-plate').innerText = plate;
-    document.getElementById('res-id').innerText = data.id;
-    document.getElementById('res-dept').innerText = data.dept;
-    document.getElementById('res-name').innerText = data.name;
-
+function displayResults(plate, dataArray, type) {
+    infoDisplay.innerHTML = ""; 
+    
     if (type === "match") {
-        statusDiv.innerText = "照合一致";
-        statusDiv.style.color = "#007AFF";
-        statusDiv.style.backgroundColor = "#eef";
+        statusDiv.innerText = dataArray.length > 1 ? `照合一致 (${dataArray.length}件)` : "照合一致";
+        statusDiv.style.color = "#007AFF"; statusDiv.style.backgroundColor = "#eef";
+        
+        let names = [];
+        dataArray.forEach((data, index) => {
+            const group = document.createElement('div');
+            group.className = "match-group";
+            group.innerHTML = `
+                <table class="info-table">
+                    <tr><th>ナンバー</th><td class="res-plate-num">${plate}${index===0 && dataArray.length>1 ? '<span class="multi-tag">重複あり</span>':''}</td></tr>
+                    <tr><th>社員番号</th><td>${data.id}</td></tr>
+                    <tr><th>部署</th><td>${data.dept}</td></tr>
+                    <tr><th>氏名</th><td>${data.name}</td></tr>
+                </table>
+            `;
+            infoDisplay.appendChild(group);
+            names.push(data.name);
+        });
+        
+        addHistory(plate, dataArray[0], "match", dataArray.length > 1);
+        speak(dataArray.length > 1 ? `該当者が${dataArray.length}名います。${names.join('さんと、')}さんです。` : names[0] + "さん");
     } else {
         statusDiv.innerText = "【警告】未登録";
-        statusDiv.style.color = "#dc3545";
-        statusDiv.style.backgroundColor = "#fff5f5";
+        statusDiv.style.color = "#dc3545"; statusDiv.style.backgroundColor = "#fff5f5";
+        infoDisplay.innerHTML = `<table class="info-table"><tr><th>ナンバー</th><td class="res-plate-num">${plate}</td></tr><tr><th>氏名</th><td>未登録</td></tr></table>`;
+        addHistory(plate, dataArray[0], "alert", false);
+        speak("未登録です");
     }
-    addHistory(plate, data, type);
-    speak(data.name);
 }
 
-function addHistory(num, data, type) {
+function addHistory(num, data, type, isMulti) {
     const card = document.createElement('div');
     card.className = `card ${type}`;
-    card.innerHTML = `<div><b>${num}</b> : ${data.name} <small>(${data.dept})</small></div><div style="font-size:11px; color:#999;">${new Date().toLocaleTimeString()}</div>`;
+    card.innerHTML = `<div><b>${num}</b> : ${data.name}${isMulti ? ' 他' : ''} <small>(${data.dept})</small></div><div style="font-size:11px; color:#999;">${new Date().toLocaleTimeString()}</div>`;
     historyItems.prepend(card);
     if (historyItems.children.length > 10) historyItems.lastChild.remove();
 }
