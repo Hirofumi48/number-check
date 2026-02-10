@@ -3,21 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合システム（高精度・履歴表示版）</title>
+    <title>車両照合システム（ローカルCSV対応版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
-        
-        /* カメラエリア */
-        #camera-container { position: sticky; top: 0; background: #000; z-index: 10; height: 45vh; overflow: hidden; }
+        #camera-container { position: sticky; top: 0; background: #000; z-index: 10; height: 40vh; overflow: hidden; }
         #video { width: 100%; height: 100%; object-fit: cover; }
         #focus-guide { 
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
-            width: 75vw; height: 35vw; border: 3px solid #00FF00; border-radius: 8px;
+            width: 75vw; height: 35vw; border: 3px solid #00FF00; border-radius: 12px;
             box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.5); pointer-events: none;
         }
 
-        /* 結果表示エリア */
+        #file-upload-section { background: #fff; margin: 10px; padding: 15px; border-radius: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .file-input-label { background: #34c759; color: white; padding: 10px 20px; border-radius: 8px; cursor: pointer; display: inline-block; font-weight: bold; font-size: 14px; }
+        #fileInput { display: none; }
+
         #result-container { margin: 15px; min-height: 160px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); text-align: left; }
         #status { font-size: 14px; color: #007AFF; margin-bottom: 10px; font-weight: bold; text-align: center; background: #eef; padding: 5px; border-radius: 4px; }
         
@@ -26,15 +27,13 @@
         .info-table th { background-color: #f8f8f8; width: 30%; color: #555; }
         .res-plate-num { font-size: 28px; font-weight: bold; color: #007AFF; }
 
-        /* ボタン */
         .shutter-btn { 
-            width: 90px; height: 90px; background: white; border: 6px solid #007AFF; 
-            border-radius: 50%; margin: -45px auto 10px; position: relative; z-index: 100;
+            width: 85px; height: 85px; background: white; border: 6px solid #007AFF; 
+            border-radius: 50%; margin: -42px auto 10px; position: relative; z-index: 100;
             display: block; box-shadow: 0 4px 15px rgba(0,0,0,0.3); outline: none;
         }
         .shutter-btn:active { background: #007AFF; }
 
-        /* 履歴エリア */
         #history-area { margin: 15px; text-align: left; }
         .history-label { font-size: 13px; color: #666; font-weight: bold; margin-bottom: 8px; padding-left: 5px; }
         .card { background: white; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 8px solid #ccc; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
@@ -51,8 +50,16 @@
     
     <button id="shutter" class="shutter-btn"></button>
 
+    <div id="file-upload-section">
+        <label class="file-input-label">
+            📁 iPhone内の名簿(CSV)を選択
+            <input type="file" id="fileInput" accept=".csv">
+        </label>
+        <div id="file-status" style="font-size: 12px; color: #666; margin-top: 5px;">名簿を読み込んでください</div>
+    </div>
+
     <div id="result-container">
-        <div id="status">大きな数字を枠に合わせてタップ</div>
+        <div id="status">名簿を読込後、枠を数字に合わせてタップ</div>
         <div id="info-display" style="display:none;">
             <table class="info-table">
                 <tr><th>ナンバー</th><td id="res-plate" class="res-plate-num"></td></tr>
@@ -74,18 +81,38 @@ const shutter = document.getElementById('shutter');
 const statusDiv = document.getElementById('status');
 const infoDisplay = document.getElementById('info-display');
 const historyItems = document.getElementById('history-items');
+const fileInput = document.getElementById('fileInput');
+const fileStatus = document.getElementById('file-status');
 
-// 社員リスト
-const employeeList = [
-    { plate: "5395", id: "59279", dept: "生産技術", name: "芳岡 博史" },
-    { plate: "1129", id: "55555", dept: "第2生産部", name: "大橋 隆幸" },
-    { plate: "90", id: "00090", dept: "テスト", name: "九十番" },
-    { plate: "582", id: "00582", dept: "テスト", name: "五八二番" },
-    { plate: "1234", id: "01234", dept: "営業部", name: "サンプル" },
-    { plate: "5678", id: "05678", dept: "企画部", name: "見本" }
-];
-
+let employeeList = []; 
 let isProcessing = false;
+
+// CSV読み込み (UTF-8)
+fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        const text = event.target.result;
+        const rows = text.split('\n');
+        employeeList = [];
+        for (let i = 0; i < rows.length; i++) {
+            const cols = rows[i].split(',');
+            if (cols.length >= 2 && cols[0].trim() !== "") {
+                employeeList.push({
+                    plate: cols[0].replace(/[^0-9]/g, '').trim(), // ナンバー
+                    id: cols[1] ? cols[1].trim() : "-",
+                    dept: cols[2] ? cols[2].trim() : "-",
+                    name: cols[3] ? cols[3].trim() : "不明"
+                });
+            }
+        }
+        fileStatus.innerText = `読み込み完了: ${employeeList.length}件`;
+        statusDiv.innerText = "照合の準備ができました";
+    };
+    reader.readAsText(file, 'UTF-8'); 
+});
 
 async function startCamera() {
     const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -95,7 +122,7 @@ async function startCamera() {
 }
 
 function findEmployee(detectedNum) {
-    if (!detectedNum) return null;
+    if (!detectedNum || employeeList.length === 0) return null;
     const numOnly = detectedNum.replace(/[^0-9]/g, '');
     const candidates = [numOnly, numOnly.substring(1), numOnly.replace(/^0+/, '')];
 
@@ -129,6 +156,10 @@ async function processFrame() {
 
 async function takePhoto() {
     if (isProcessing) return;
+    if (employeeList.length === 0) {
+        alert("名簿CSVを選択してください");
+        return;
+    }
     isProcessing = true;
     statusDiv.innerText = "解析中 (3連射)...";
     
@@ -158,8 +189,7 @@ function displayResult(plate, data, type) {
     document.getElementById('res-id').innerText = data.id;
     document.getElementById('res-dept').innerText = data.dept;
     document.getElementById('res-name').innerText = data.name;
-    
-    statusDiv.innerText = type === "match" ? "【照合一致】" : "【未登録】";
+    statusDiv.innerText = type === "match" ? "照合一致" : "未登録";
     addHistory(plate, data, type);
     speak(data.name);
 }
