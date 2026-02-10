@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合システム（ローカルCSV対応版）</title>
+    <title>車両照合システム（未登録アラート強化版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -20,6 +20,7 @@
         #fileInput { display: none; }
 
         #result-container { margin: 15px; min-height: 160px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); text-align: left; }
+        /* ステータス初期値（青） */
         #status { font-size: 14px; color: #007AFF; margin-bottom: 10px; font-weight: bold; text-align: center; background: #eef; padding: 5px; border-radius: 4px; }
         
         .info-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
@@ -101,7 +102,7 @@ fileInput.addEventListener('change', (e) => {
             const cols = rows[i].split(',');
             if (cols.length >= 2 && cols[0].trim() !== "") {
                 employeeList.push({
-                    plate: cols[0].replace(/[^0-9]/g, '').trim(), // ナンバー
+                    plate: cols[0].replace(/[^0-9]/g, '').trim(), 
                     id: cols[1] ? cols[1].trim() : "-",
                     dept: cols[2] ? cols[2].trim() : "-",
                     name: cols[3] ? cols[3].trim() : "不明"
@@ -110,6 +111,8 @@ fileInput.addEventListener('change', (e) => {
         }
         fileStatus.innerText = `読み込み完了: ${employeeList.length}件`;
         statusDiv.innerText = "照合の準備ができました";
+        statusDiv.style.color = "#007AFF";
+        statusDiv.style.backgroundColor = "#eef";
     };
     reader.readAsText(file, 'UTF-8'); 
 });
@@ -162,6 +165,8 @@ async function takePhoto() {
     }
     isProcessing = true;
     statusDiv.innerText = "解析中 (3連射)...";
+    statusDiv.style.color = "#007AFF";
+    statusDiv.style.backgroundColor = "#eef";
     
     let finalMatch = null;
     let lastNum = "";
@@ -189,7 +194,17 @@ function displayResult(plate, data, type) {
     document.getElementById('res-id').innerText = data.id;
     document.getElementById('res-dept').innerText = data.dept;
     document.getElementById('res-name').innerText = data.name;
-    statusDiv.innerText = type === "match" ? "照合一致" : "未登録";
+
+    if (type === "match") {
+        statusDiv.innerText = "照合一致";
+        statusDiv.style.color = "#007AFF"; // 青
+        statusDiv.style.backgroundColor = "#eef";
+    } else {
+        statusDiv.innerText = "【警告】未登録";
+        statusDiv.style.color = "#dc3545"; // 赤
+        statusDiv.style.backgroundColor = "#fff5f5"; // 薄い赤背景
+    }
+
     addHistory(plate, data, type);
     speak(data.name);
 }
