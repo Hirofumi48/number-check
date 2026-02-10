@@ -1,9 +1,17 @@
+芳岡さん、申し訳ありません！原因がわかりました。
+
+iPhone（iOS）のSafariなどのブラウザでは、prompt（手入力の画面）が表示されている間、セキュリティとリソース節約のために**カメラの動作が一時的にサスペンド（一時停止）**されることがあります。 手入力が終わった後にカメラが自動で「再開」されず、フリーズしたような状態になっていたようです。
+
+手入力の処理が終わった直後に、明示的にカメラを再起動（リフレッシュ）する処理を追加しました。これでスムーズに次のスキャンに移れるはずです。
+
+修正版：手入力後のフリーズ解消スクリプト
+HTML
 <!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（カメラ＆手入力版）</title>
+    <title>車両照合（手入力復旧版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -15,7 +23,6 @@
             box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.5); pointer-events: none;
         }
 
-        /* 入力アクションエリア */
         #action-area { display: flex; justify-content: center; align-items: center; gap: 20px; margin: -40px auto 10px; position: relative; z-index: 100; }
         .shutter-btn { 
             width: 80px; height: 80px; background: white; border: 6px solid #007AFF; 
@@ -122,16 +129,28 @@ fileInput.addEventListener('change', (e) => {
 });
 
 async function startCamera() {
+    // 既存のストリームがある場合は一度停止させる
+    if (video.srcObject) {
+        video.srcObject.getTracks().forEach(track => track.stop());
+    }
     const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { facingMode: "environment", width: { ideal: 1280 } } 
     });
     video.srcObject = stream;
+    // iOSでのフリーズ対策としてplayを明示的に呼ぶ
+    video.play();
 }
 
 // 手入力機能
-manualBtn.onclick = () => {
+manualBtn.onclick = async () => {
     if (employeeList.length === 0) return alert("先に名簿を読み込んでください");
+    
+    // 入力画面（ここでカメラが止まることがある）
     const num = prompt("ナンバーを入力してください（数字のみ）");
+    
+    // 入力画面が閉じた後、カメラを「再起動」してフリーズを防ぐ
+    await startCamera();
+
     if (num) {
         const match = findEmployee(num);
         if (match) {
