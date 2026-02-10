@@ -3,37 +3,41 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合システム（未登録アラート強化版）</title>
+    <title>車両照合（カメラ＆手入力版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
-        #camera-container { position: sticky; top: 0; background: #000; z-index: 10; height: 40vh; overflow: hidden; }
+        #camera-container { position: sticky; top: 0; background: #000; z-index: 10; height: 35vh; overflow: hidden; }
         #video { width: 100%; height: 100%; object-fit: cover; }
         #focus-guide { 
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
-            width: 75vw; height: 35vw; border: 3px solid #00FF00; border-radius: 12px;
+            width: 70vw; height: 30vw; border: 3px solid #00FF00; border-radius: 12px;
             box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.5); pointer-events: none;
         }
 
-        #file-upload-section { background: #fff; margin: 10px; padding: 15px; border-radius: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        .file-input-label { background: #34c759; color: white; padding: 10px 20px; border-radius: 8px; cursor: pointer; display: inline-block; font-weight: bold; font-size: 14px; }
+        /* 入力アクションエリア */
+        #action-area { display: flex; justify-content: center; align-items: center; gap: 20px; margin: -40px auto 10px; position: relative; z-index: 100; }
+        .shutter-btn { 
+            width: 80px; height: 80px; background: white; border: 6px solid #007AFF; 
+            border-radius: 50%; box-shadow: 0 4px 15px rgba(0,0,0,0.3); outline: none;
+        }
+        .shutter-btn:active { background: #007AFF; }
+        .manual-btn {
+            background: #555; color: white; border: none; padding: 10px 15px; border-radius: 20px;
+            font-size: 14px; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+        }
+
+        #file-upload-section { background: #fff; margin: 10px; padding: 12px; border-radius: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .file-input-label { background: #34c759; color: white; padding: 8px 16px; border-radius: 8px; cursor: pointer; display: inline-block; font-weight: bold; font-size: 13px; }
         #fileInput { display: none; }
 
-        #result-container { margin: 15px; min-height: 160px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); text-align: left; }
-        /* ステータス初期値（青） */
+        #result-container { margin: 10px 15px; min-height: 160px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); text-align: left; }
         #status { font-size: 14px; color: #007AFF; margin-bottom: 10px; font-weight: bold; text-align: center; background: #eef; padding: 5px; border-radius: 4px; }
         
         .info-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
         .info-table th, .info-table td { border: 1px solid #ddd; padding: 10px; font-size: 16px; }
         .info-table th { background-color: #f8f8f8; width: 30%; color: #555; }
         .res-plate-num { font-size: 28px; font-weight: bold; color: #007AFF; }
-
-        .shutter-btn { 
-            width: 85px; height: 85px; background: white; border: 6px solid #007AFF; 
-            border-radius: 50%; margin: -42px auto 10px; position: relative; z-index: 100;
-            display: block; box-shadow: 0 4px 15px rgba(0,0,0,0.3); outline: none;
-        }
-        .shutter-btn:active { background: #007AFF; }
 
         #history-area { margin: 15px; text-align: left; }
         .history-label { font-size: 13px; color: #666; font-weight: bold; margin-bottom: 8px; padding-left: 5px; }
@@ -49,18 +53,21 @@
         <div id="focus-guide"></div>
     </div>
     
-    <button id="shutter" class="shutter-btn"></button>
+    <div id="action-area">
+        <button id="shutter" class="shutter-btn"></button>
+        <button id="manualInputBtn" class="manual-btn">⌨ 手入力</button>
+    </div>
 
     <div id="file-upload-section">
         <label class="file-input-label">
-            📁 iPhone内の名簿(CSV)を選択
+            📁 名簿(CSV)選択
             <input type="file" id="fileInput" accept=".csv">
         </label>
-        <div id="file-status" style="font-size: 12px; color: #666; margin-top: 5px;">名簿を読み込んでください</div>
+        <div id="file-status" style="font-size: 11px; color: #666; margin-top: 5px;">名簿を読み込んでください</div>
     </div>
 
     <div id="result-container">
-        <div id="status">名簿を読込後、枠を数字に合わせてタップ</div>
+        <div id="status">名簿を読込後、開始してください</div>
         <div id="info-display" style="display:none;">
             <table class="info-table">
                 <tr><th>ナンバー</th><td id="res-plate" class="res-plate-num"></td></tr>
@@ -79,6 +86,7 @@
 <script>
 const video = document.getElementById('video');
 const shutter = document.getElementById('shutter');
+const manualBtn = document.getElementById('manualInputBtn');
 const statusDiv = document.getElementById('status');
 const infoDisplay = document.getElementById('info-display');
 const historyItems = document.getElementById('history-items');
@@ -88,15 +96,13 @@ const fileStatus = document.getElementById('file-status');
 let employeeList = []; 
 let isProcessing = false;
 
-// CSV読み込み (UTF-8)
+// CSV読み込み
 fileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (event) => {
-        const text = event.target.result;
-        const rows = text.split('\n');
+        const rows = event.target.result.split('\n');
         employeeList = [];
         for (let i = 0; i < rows.length; i++) {
             const cols = rows[i].split(',');
@@ -110,9 +116,7 @@ fileInput.addEventListener('change', (e) => {
             }
         }
         fileStatus.innerText = `読み込み完了: ${employeeList.length}件`;
-        statusDiv.innerText = "照合の準備ができました";
-        statusDiv.style.color = "#007AFF";
-        statusDiv.style.backgroundColor = "#eef";
+        statusDiv.innerText = "準備完了";
     };
     reader.readAsText(file, 'UTF-8'); 
 });
@@ -124,11 +128,24 @@ async function startCamera() {
     video.srcObject = stream;
 }
 
+// 手入力機能
+manualBtn.onclick = () => {
+    if (employeeList.length === 0) return alert("先に名簿を読み込んでください");
+    const num = prompt("ナンバーを入力してください（数字のみ）");
+    if (num) {
+        const match = findEmployee(num);
+        if (match) {
+            displayResult(match.plate, match, "match");
+        } else {
+            displayResult(num, { id: "-", dept: "-", name: "未登録" }, "alert");
+        }
+    }
+};
+
 function findEmployee(detectedNum) {
     if (!detectedNum || employeeList.length === 0) return null;
     const numOnly = detectedNum.replace(/[^0-9]/g, '');
     const candidates = [numOnly, numOnly.substring(1), numOnly.replace(/^0+/, '')];
-
     for (const val of candidates) {
         if (!val) continue;
         const match = employeeList.find(emp => emp.plate === val || (val.length === emp.plate.length && isSimilar(val, emp.plate)));
@@ -159,10 +176,7 @@ async function processFrame() {
 
 async function takePhoto() {
     if (isProcessing) return;
-    if (employeeList.length === 0) {
-        alert("名簿CSVを選択してください");
-        return;
-    }
+    if (employeeList.length === 0) return alert("名簿CSVを選択してください");
     isProcessing = true;
     statusDiv.innerText = "解析中 (3連射)...";
     statusDiv.style.color = "#007AFF";
@@ -170,16 +184,13 @@ async function takePhoto() {
     
     let finalMatch = null;
     let lastNum = "";
-
     for (let i = 0; i < 3; i++) {
-        statusDiv.innerText = `解析中 (${i+1}/3枚目)...`;
         const num = await processFrame();
         lastNum = num;
         finalMatch = findEmployee(num);
         if (finalMatch) break;
         await new Promise(r => setTimeout(r, 150));
     }
-
     if (finalMatch) {
         displayResult(finalMatch.plate, finalMatch, "match");
     } else {
@@ -197,14 +208,13 @@ function displayResult(plate, data, type) {
 
     if (type === "match") {
         statusDiv.innerText = "照合一致";
-        statusDiv.style.color = "#007AFF"; // 青
+        statusDiv.style.color = "#007AFF";
         statusDiv.style.backgroundColor = "#eef";
     } else {
         statusDiv.innerText = "【警告】未登録";
-        statusDiv.style.color = "#dc3545"; // 赤
-        statusDiv.style.backgroundColor = "#fff5f5"; // 薄い赤背景
+        statusDiv.style.color = "#dc3545";
+        statusDiv.style.backgroundColor = "#fff5f5";
     }
-
     addHistory(plate, data, type);
     speak(data.name);
 }
@@ -212,10 +222,7 @@ function displayResult(plate, data, type) {
 function addHistory(num, data, type) {
     const card = document.createElement('div');
     card.className = `card ${type}`;
-    card.innerHTML = `
-        <div><b>${num}</b> : ${data.name} <small>(${data.dept})</small></div>
-        <div style="font-size:11px; color:#999;">${new Date().toLocaleTimeString()}</div>
-    `;
+    card.innerHTML = `<div><b>${num}</b> : ${data.name} <small>(${data.dept})</small></div><div style="font-size:11px; color:#999;">${new Date().toLocaleTimeString()}</div>`;
     historyItems.prepend(card);
     if (historyItems.children.length > 10) historyItems.lastChild.remove();
 }
