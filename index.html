@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（Safari音声安定版）</title>
+    <title>車両照合（音声案内改善版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -55,6 +55,7 @@
         .card { background: white; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 8px solid #ccc; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .card.match { border-left-color: #28a745; }
         .card.alert { border-left-color: #dc3545; background: #fff5f5; }
+        .card.error { border-left-color: #ffc107; background: #fffdf5; } /* 読み取り不能用 */
     </style>
 </head>
 <body>
@@ -110,7 +111,6 @@ const fileInput = document.getElementById('fileInput');
 let employeeList = []; 
 let isProcessing = false;
 
-// --- 音声エンジンの「目覚まし」関数 ---
 function unlockAudio() {
     window.speechSynthesis.cancel();
     const s = new SpeechSynthesisUtterance(" ");
@@ -118,7 +118,6 @@ function unlockAudio() {
     window.speechSynthesis.speak(s);
 }
 
-// ページを開いた後の最初のタップで音声機能を有効化
 document.addEventListener('touchstart', unlockAudio, { once: true });
 
 fileInput.addEventListener('change', (e) => {
@@ -141,7 +140,7 @@ fileInput.addEventListener('change', (e) => {
         }
         document.getElementById('file-status').innerText = `読込完了: ${employeeList.length}件`;
         statusDiv.innerText = "準備完了";
-        unlockAudio(); // CSV読み込み時にも一度起こす
+        unlockAudio();
     };
     reader.readAsText(file, 'UTF-8'); 
 });
@@ -160,9 +159,7 @@ manualBtn.onclick = () => {
     manualInputField.focus();
 };
 
-cancelManualBtn.onclick = () => {
-    manualPanel.style.display = "none";
-};
+cancelManualBtn.onclick = () => { manualPanel.style.display = "none"; };
 
 execManualBtn.onclick = async () => {
     const num = manualInputField.value;
@@ -224,16 +221,22 @@ async function takePhoto() {
         if (finalMatches.length > 0) break;
         await new Promise(r => setTimeout(r, 150));
     }
+
     if (finalMatches.length > 0) {
         displayResults(finalMatches[0].plate, finalMatches, "match");
+    } else if (lastNum === "") {
+        // 全く読み取れなかった場合
+        displayResults("----", [{ id: "-", dept: "-", name: "(読み取り不能)" }], "error");
     } else {
-        displayResults(lastNum || "??", [{ id: "-", dept: "-", name: "未登録" }], "alert");
+        // 数字は出たが名簿にない場合
+        displayResults(lastNum, [{ id: "-", dept: "-", name: "未登録" }], "alert");
     }
     isProcessing = false;
 }
 
 function displayResults(plate, dataArray, type) {
     infoDisplay.innerHTML = ""; 
+    
     if (type === "match") {
         statusDiv.innerText = dataArray.length > 1 ? `照合一致 (${dataArray.length}件)` : "照合一致";
         statusDiv.style.color = "#007AFF"; statusDiv.style.backgroundColor = "#eef";
@@ -241,13 +244,23 @@ function displayResults(plate, dataArray, type) {
         dataArray.forEach((data, index) => {
             const group = document.createElement('div');
             group.className = "match-group";
-            group.innerHTML = `<table class="info-table"><tr><th>ナンバー</th><td class="res-plate-num">${plate}${index===0 && dataArray.length>1 ? '<span class="multi-tag">重複</span>':''}</td></tr><tr><th>社員番号</th><td>${data.id}</td></tr><tr><th>部署</th><td>${data.dept}</td></tr><tr><th>氏名</th><td>${data.name}</td></tr></table>`;
+            group.innerHTML = `<table class="info-table"><tr><th>ナンバー</th><td class="res-plate-num">${plate}${index===0 && dataArray.length>1 ? '<span class="multi-tag">重複</span>':''}</td></tr><tr><th>氏名</th><td>${data.name}</td></tr></table>`;
             infoDisplay.appendChild(group);
             names.push(data.name);
         });
         addHistory(plate, dataArray[0], "match", dataArray.length > 1);
         speak(dataArray.length > 1 ? `該当者が${dataArray.length}名います。${names.join('さんと、')}さんです。` : names[0] + "さん");
+
+    } else if (type === "error") {
+        // 読み取り失敗時
+        statusDiv.innerText = "読み取り失敗";
+        statusDiv.style.color = "#856404"; statusDiv.style.backgroundColor = "#fff3cd";
+        infoDisplay.innerHTML = `<table class="info-table"><tr><th>ナンバー</th><td class="res-plate-num">----</td></tr><tr><th>氏名</th><td>読み取れませんでした</td></tr></table>`;
+        addHistory("----", { name: "読み取り不能", dept: "-" }, "error", false);
+        speak("読み取れませんでした。もう一度お願いします。");
+
     } else {
+        // 未登録時
         statusDiv.innerText = "【警告】未登録";
         statusDiv.style.color = "#dc3545"; statusDiv.style.backgroundColor = "#fff5f5";
         infoDisplay.innerHTML = `<table class="info-table"><tr><th>ナンバー</th><td class="res-plate-num">${plate}</td></tr><tr><th>氏名</th><td>未登録</td></tr></table>`;
@@ -259,21 +272,17 @@ function displayResults(plate, dataArray, type) {
 function addHistory(num, data, type, isMulti) {
     const card = document.createElement('div');
     card.className = `card ${type}`;
-    card.innerHTML = `<div><b>${num}</b> : ${data.name}${isMulti ? ' 他' : ''} <small>(${data.dept})</small></div><div style="font-size:11px; color:#999;">${new Date().toLocaleTimeString()}</div>`;
+    card.innerHTML = `<div><b>${num}</b> : ${data.name}${isMulti ? ' 他' : ''}</div><div style="font-size:11px; color:#999;">${new Date().toLocaleTimeString()}</div>`;
     historyItems.prepend(card);
     if (historyItems.children.length > 10) historyItems.lastChild.remove();
 }
 
-// 読み上げ処理の安定化
 function speak(t) {
-    window.speechSynthesis.cancel(); // 予約されている音声をリセット
-    
-    // iOS Safariでは少し待機時間を設けると安定する
+    window.speechSynthesis.cancel();
     setTimeout(() => {
         const s = new SpeechSynthesisUtterance(t);
         s.lang = 'ja-JP';
         s.rate = 1.0;
-        s.onerror = () => { window.speechSynthesis.cancel(); };
         window.speechSynthesis.speak(s);
     }, 100);
 }
