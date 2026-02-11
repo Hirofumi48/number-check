@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（テンキー最適化版）</title>
+    <title>車両照合（Safari音声安定版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -26,7 +26,6 @@
             font-size: 14px; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
         }
 
-        /* --- 手入力パネルのスタイル --- */
         #manual-input-panel {
             display: none; background: white; margin: 10px 15px; padding: 15px; border-radius: 12px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.2); text-align: center;
@@ -111,14 +110,17 @@ const fileInput = document.getElementById('fileInput');
 let employeeList = []; 
 let isProcessing = false;
 
-// 音声アンロック
+// --- 音声エンジンの「目覚まし」関数 ---
 function unlockAudio() {
-    const s = new SpeechSynthesisUtterance("");
+    window.speechSynthesis.cancel();
+    const s = new SpeechSynthesisUtterance(" ");
     s.volume = 0;
     window.speechSynthesis.speak(s);
 }
 
-// CSV読み込み
+// ページを開いた後の最初のタップで音声機能を有効化
+document.addEventListener('touchstart', unlockAudio, { once: true });
+
 fileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -139,6 +141,7 @@ fileInput.addEventListener('change', (e) => {
         }
         document.getElementById('file-status').innerText = `読込完了: ${employeeList.length}件`;
         statusDiv.innerText = "準備完了";
+        unlockAudio(); // CSV読み込み時にも一度起こす
     };
     reader.readAsText(file, 'UTF-8'); 
 });
@@ -150,12 +153,11 @@ async function startCamera() {
     video.play();
 }
 
-// --- 手入力ボタンの動作 ---
 manualBtn.onclick = () => {
     unlockAudio();
     manualPanel.style.display = "block";
     manualInputField.value = "";
-    manualInputField.focus(); // 自動でキーボードを立ち上げる
+    manualInputField.focus();
 };
 
 cancelManualBtn.onclick = () => {
@@ -165,7 +167,6 @@ cancelManualBtn.onclick = () => {
 execManualBtn.onclick = async () => {
     const num = manualInputField.value;
     if (!num) return;
-    
     manualPanel.style.display = "none";
     const matches = findAllMatches(num);
     if (matches.length > 0) {
@@ -263,11 +264,18 @@ function addHistory(num, data, type, isMulti) {
     if (historyItems.children.length > 10) historyItems.lastChild.remove();
 }
 
+// 読み上げ処理の安定化
 function speak(t) {
-    window.speechSynthesis.cancel();
-    const s = new SpeechSynthesisUtterance(t);
-    s.lang = 'ja-JP';
-    window.speechSynthesis.speak(s);
+    window.speechSynthesis.cancel(); // 予約されている音声をリセット
+    
+    // iOS Safariでは少し待機時間を設けると安定する
+    setTimeout(() => {
+        const s = new SpeechSynthesisUtterance(t);
+        s.lang = 'ja-JP';
+        s.rate = 1.0;
+        s.onerror = () => { window.speechSynthesis.cancel(); };
+        window.speechSynthesis.speak(s);
+    }, 100);
 }
 
 shutter.onclick = takePhoto;
