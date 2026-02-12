@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（照合ロジック修正版）</title>
+    <title>車両照合（桁数ガード機能付き）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -130,7 +130,6 @@ fileInput.addEventListener('change', (e) => {
         for (let i = 0; i < rows.length; i++) {
             const cols = rows[i].split(',');
             if (cols.length >= 2 && cols[0].trim() !== "") {
-                // ナンバー列から数字だけを抽出
                 const plateNum = cols[0].replace(/[^0-9]/g, '').trim();
                 if (plateNum) {
                     employeeList.push({
@@ -169,6 +168,13 @@ execManualBtn.onclick = async () => {
     const num = manualInputField.value;
     if (!num) return;
     manualPanel.style.display = "none";
+    
+    // 手入力時も一応5桁チェック（誤操作防止）
+    if (num.length > 4) {
+        displayResults(num, [{ id: "-", dept: "-", name: "(桁数過多)" }], "error");
+        return;
+    }
+
     const matches = findAllMatches(num);
     if (matches.length > 0) {
         displayResults(num, matches, "match");
@@ -177,18 +183,14 @@ execManualBtn.onclick = async () => {
     }
 };
 
-// --- ここが修正の核心：照合ロジック ---
 function findAllMatches(detectedNum) {
     if (!detectedNum || employeeList.length === 0) return [];
     const numOnly = detectedNum.replace(/[^0-9]/g, '');
-    if (!numOnly) return [];
+    if (!numOnly || numOnly.length > 4) return []; // 5桁以上は検索対象外
 
-    // 1. まずは「完全一致」を最優先で探す
     let found = employeeList.filter(emp => emp.plate === numOnly);
     if (found.length > 0) return found;
 
-    // 2. 4桁未満の場合、OCRの誤認（先頭の0が読めない等）を考慮して0を除去して再検索
-    // ※入力が4桁あるときは、別の3桁車と誤認させないため実行しない
     if (numOnly.length < 4) {
         const noZero = numOnly.replace(/^0+/, '');
         if (noZero && noZero !== numOnly) {
@@ -197,8 +199,6 @@ function findAllMatches(detectedNum) {
         }
     }
 
-    // 3. 最後に「あいまい検索（1文字違い）」
-    // 誤認識リスクを下げるため「入力と名簿が同じ桁数」かつ「3桁以上」の場合のみ実行
     found = employeeList.filter(emp => 
         numOnly.length >= 3 && 
         emp.plate.length === numOnly.length && 
@@ -244,7 +244,11 @@ async function takePhoto() {
         await new Promise(r => setTimeout(r, 150));
     }
 
-    if (finalMatches.length > 0) {
+    // --- 桁数チェックと結果判定 ---
+    if (lastNum.length > 4) {
+        // 日本のナンバープレートに5桁以上の数字はないため、読み取り失敗とする
+        displayResults(lastNum, [{ id: "-", dept: "-", name: "(読み取り不能)" }], "error");
+    } else if (finalMatches.length > 0) {
         displayResults(finalMatches[0].plate, finalMatches, "match");
     } else if (lastNum === "") {
         displayResults("----", [{ id: "-", dept: "-", name: "(読み取り不能)" }], "error");
@@ -272,10 +276,12 @@ function displayResults(plate, dataArray, type) {
         speak(dataArray.length > 1 ? `該当者が${dataArray.length}名います。${names.join('さんと、')}さんです。` : names[0] + "さん");
 
     } else if (type === "error") {
+        // 5桁以上の際もここを通る
         statusDiv.innerText = "読み取り失敗";
         statusDiv.style.color = "#856404"; statusDiv.style.backgroundColor = "#fff3cd";
-        infoDisplay.innerHTML = `<table class="info-table"><tr><th>ナンバー</th><td class="res-plate-num">----</td></tr><tr><th>氏名</th><td>読み取れませんでした</td></tr></table>`;
-        addHistory("----", { name: "読み取り不能", dept: "-" }, "error", false);
+        const errorName = dataArray[0].name === "(桁数過多)" ? "数字が多すぎます" : "読み取れませんでした";
+        infoDisplay.innerHTML = `<table class="info-table"><tr><th>ナンバー</th><td class="res-plate-num">${plate}</td></tr><tr><th>氏名</th><td>${errorName}</td></tr></table>`;
+        addHistory(plate, { name: "読み取り不能", dept: "-" }, "error", false);
         speak("読み取れませんでした。もう一度お願いします。");
 
     } else {
