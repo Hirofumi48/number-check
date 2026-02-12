@@ -3,66 +3,55 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（桁数ガード機能付き）</title>
+    <title>車両照合（座標ベース認識）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
-        #camera-container { position: sticky; top: 0; background: #000; z-index: 10; height: 35vh; overflow: hidden; }
+        body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; overflow-x: hidden; }
+        #camera-container { position: sticky; top: 0; background: #000; z-index: 10; height: 45vh; display: flex; align-items: center; justify-content: center; overflow: hidden; }
         #video { width: 100%; height: 100%; object-fit: cover; }
+        
+        /* 330:165 (2:1) の比率に固定したガイド枠 */
         #focus-guide { 
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
-            width: 70vw; height: 30vw; border: 3px solid #00FF00; border-radius: 12px;
-            box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.5); pointer-events: none;
+            width: 80vw; height: 40vw; /* 2:1比率 */
+            border: 3px solid #00FF00; border-radius: 4px;
+            box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.6); pointer-events: none;
         }
+        #guide-label { position: absolute; top: -25px; left: 0; color: #00FF00; font-size: 12px; font-weight: bold; }
 
-        #action-area { display: flex; justify-content: center; align-items: center; gap: 20px; margin: -40px auto 10px; position: relative; z-index: 100; }
-        .shutter-btn { 
-            width: 80px; height: 80px; background: white; border: 6px solid #007AFF; 
-            border-radius: 50%; box-shadow: 0 4px 15px rgba(0,0,0,0.3); outline: none;
-        }
-        .shutter-btn:active { background: #007AFF; }
-        .manual-btn {
-            background: #555; color: white; border: none; padding: 10px 15px; border-radius: 20px;
-            font-size: 14px; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-        }
+        #action-area { display: flex; justify-content: center; align-items: center; gap: 20px; margin: -30px auto 10px; position: relative; z-index: 100; }
+        .shutter-btn { width: 70px; height: 70px; background: white; border: 5px solid #007AFF; border-radius: 50%; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
+        .manual-btn { background: #555; color: white; border: none; padding: 10px 15px; border-radius: 20px; font-size: 14px; }
 
-        #manual-input-panel {
-            display: none; background: white; margin: 10px 15px; padding: 15px; border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2); text-align: center;
-        }
-        #manual-num-input {
-            width: 60%; font-size: 24px; padding: 10px; border: 2px solid #ddd; border-radius: 8px;
-            text-align: center; margin-bottom: 10px; -webkit-appearance: none;
-        }
-        .input-ok-btn { background: #007AFF; color: white; border: none; padding: 12px 25px; border-radius: 8px; font-weight: bold; }
+        #manual-input-panel { display: none; background: white; margin: 10px 15px; padding: 15px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        #manual-num-input { width: 60%; font-size: 24px; padding: 10px; border: 2px solid #ddd; border-radius: 8px; text-align: center; }
 
-        #file-upload-section { background: #fff; margin: 10px; padding: 12px; border-radius: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        .file-input-label { background: #34c759; color: white; padding: 8px 16px; border-radius: 8px; cursor: pointer; display: inline-block; font-weight: bold; font-size: 13px; }
-        #fileInput { display: none; }
-
-        #result-container { margin: 10px 15px; min-height: 100px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); text-align: left; }
+        #file-upload-section { background: #fff; margin: 10px; padding: 10px; border-radius: 12px; }
+        .file-input-label { background: #34c759; color: white; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: bold; }
+        
+        #result-container { margin: 10px 15px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); text-align: left; }
         #status { font-size: 14px; color: #007AFF; margin-bottom: 10px; font-weight: bold; text-align: center; background: #eef; padding: 5px; border-radius: 4px; }
         
-        .match-group { border-bottom: 2px dashed #eee; padding-bottom: 10px; margin-bottom: 10px; }
-        .info-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
-        .info-table th, .info-table td { border: 1px solid #ddd; padding: 8px; font-size: 15px; }
-        .info-table th { background-color: #f8f8f8; width: 30%; color: #555; }
-        .res-plate-num { font-size: 24px; font-weight: bold; color: #007AFF; }
-        .multi-tag { background: orange; color: white; font-size: 10px; padding: 2px 6px; border-radius: 10px; vertical-align: middle; margin-left: 5px; }
+        .info-table { width: 100%; border-collapse: collapse; }
+        .info-table th, .info-table td { border: 1px solid #ddd; padding: 8px; }
+        .info-table th { background-color: #f8f8f8; width: 30%; font-size: 14px; }
+        .res-plate-num { font-size: 28px; font-weight: bold; color: #007AFF; letter-spacing: 2px; }
 
-        #history-area { margin: 15px; text-align: left; }
-        .history-label { font-size: 13px; color: #666; font-weight: bold; margin-bottom: 8px; padding-left: 5px; }
-        .card { background: white; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 8px solid #ccc; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        #debug-canvas-container { margin: 10px; font-size: 11px; color: #666; }
+        canvas { max-width: 100%; height: auto; border: 1px solid #ccc; margin-top: 5px; }
+        
+        .card { background: white; padding: 10px; border-radius: 8px; margin-bottom: 5px; border-left: 6px solid #ccc; display: flex; justify-content: space-between; align-items: center; font-size: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         .card.match { border-left-color: #28a745; }
-        .card.alert { border-left-color: #dc3545; background: #fff5f5; }
-        .card.error { border-left-color: #ffc107; background: #fffdf5; }
+        .card.alert { border-left-color: #dc3545; }
     </style>
 </head>
 <body>
 
     <div id="camera-container">
         <video id="video" autoplay playsinline></video>
-        <div id="focus-guide"></div>
+        <div id="focus-guide">
+            <div id="guide-label">枠内にナンバーを合わせてください</div>
+        </div>
     </div>
     
     <div id="action-area">
@@ -71,246 +60,200 @@
     </div>
 
     <div id="manual-input-panel">
-        <input type="text" id="manual-num-input" inputmode="numeric" pattern="[0-9]*" placeholder="数字4桁">
-        <br>
-        <button class="input-ok-btn" id="execManual">照合する</button>
+        <input type="text" id="manual-num-input" inputmode="numeric" placeholder="数字4桁">
+        <br><br>
+        <button style="background:#007AFF; color:white; border:none; padding:10px 20px; border-radius:8px;" id="execManual">照合</button>
         <button style="background:none; border:none; color:gray; margin-left:10px;" id="cancelManual">閉じる</button>
     </div>
 
     <div id="file-upload-section">
-        <label class="file-input-label">
-            📁 名簿(CSV)選択
-            <input type="file" id="fileInput" accept=".csv">
-        </label>
-        <div id="file-status" style="font-size: 11px; color: #666; margin-top: 5px;">名簿を読み込んでください</div>
+        <label class="file-input-label">📁 名簿CSVを選択<input type="file" id="fileInput" accept=".csv" style="display:none;"></label>
+        <div id="file-status" style="font-size: 11px; margin-top:5px;">名簿を読込後に開始</div>
     </div>
 
     <div id="result-container">
-        <div id="status">名簿を読込後、開始してください</div>
+        <div id="status">Ready</div>
         <div id="info-display"></div>
     </div>
 
-    <div id="history-area">
-        <div class="history-label">検知履歴（最新10件）</div>
+    <div id="debug-canvas-container">
+        解析エリアプレビュー:<br>
+        <canvas id="debugCanvas"></canvas>
+    </div>
+
+    <div id="history-area" style="margin:15px; text-align:left;">
+        <div style="font-size:12px; color:#666; margin-bottom:5px;">履歴</div>
         <div id="history-items"></div>
     </div>
 
 <script>
 const video = document.getElementById('video');
 const shutter = document.getElementById('shutter');
-const manualBtn = document.getElementById('manualInputBtn');
-const manualPanel = document.getElementById('manual-input-panel');
-const manualInputField = document.getElementById('manual-num-input');
-const execManualBtn = document.getElementById('execManual');
-const cancelManualBtn = document.getElementById('cancelManual');
 const statusDiv = document.getElementById('status');
 const infoDisplay = document.getElementById('info-display');
+const debugCanvas = document.getElementById('debugCanvas');
 const historyItems = document.getElementById('history-items');
 const fileInput = document.getElementById('fileInput');
 
 let employeeList = []; 
 let isProcessing = false;
 
+// 音声アンロック
 function unlockAudio() {
     window.speechSynthesis.cancel();
-    const s = new SpeechSynthesisUtterance(" ");
-    s.volume = 0;
-    window.speechSynthesis.speak(s);
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(" "));
 }
-
 document.addEventListener('touchstart', unlockAudio, { once: true });
 
+// CSV読込
 fileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (event) => {
         const rows = event.target.result.split('\n');
-        employeeList = [];
-        for (let i = 0; i < rows.length; i++) {
-            const cols = rows[i].split(',');
-            if (cols.length >= 2 && cols[0].trim() !== "") {
-                const plateNum = cols[0].replace(/[^0-9]/g, '').trim();
-                if (plateNum) {
-                    employeeList.push({
-                        plate: plateNum, 
-                        id: cols[1] ? cols[1].trim() : "-",
-                        dept: cols[2] ? cols[2].trim() : "-",
-                        name: cols[3] ? cols[3].trim() : "不明"
-                    });
-                }
-            }
-        }
+        employeeList = rows.map(row => {
+            const cols = row.split(',');
+            return {
+                plate: (cols[0]||"").replace(/[^0-9]/g, '').trim(),
+                id: (cols[1]||"").trim(),
+                dept: (cols[2]||"").trim(),
+                name: (cols[3]||"").trim()
+            };
+        }).filter(item => item.plate !== "");
         document.getElementById('file-status').innerText = `読込完了: ${employeeList.length}件`;
         statusDiv.innerText = "準備完了";
-        unlockAudio();
     };
     reader.readAsText(file, 'UTF-8'); 
 });
 
 async function startCamera() {
-    if (video.srcObject) { video.srcObject.getTracks().forEach(track => track.stop()); }
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 } } });
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } 
+    });
     video.srcObject = stream;
-    video.play();
 }
 
-manualBtn.onclick = () => {
-    unlockAudio();
-    manualPanel.style.display = "block";
-    manualInputField.value = "";
-    manualInputField.focus();
-};
-
-cancelManualBtn.onclick = () => { manualPanel.style.display = "none"; };
-
-execManualBtn.onclick = async () => {
-    const num = manualInputField.value;
-    if (!num) return;
-    manualPanel.style.display = "none";
-    
-    // 手入力時も一応5桁チェック（誤操作防止）
-    if (num.length > 4) {
-        displayResults(num, [{ id: "-", dept: "-", name: "(桁数過多)" }], "error");
-        return;
-    }
-
-    const matches = findAllMatches(num);
-    if (matches.length > 0) {
-        displayResults(num, matches, "match");
-    } else {
-        displayResults(num, [{ id: "-", dept: "-", name: "未登録" }], "alert");
-    }
-};
-
-function findAllMatches(detectedNum) {
-    if (!detectedNum || employeeList.length === 0) return [];
-    const numOnly = detectedNum.replace(/[^0-9]/g, '');
-    if (!numOnly || numOnly.length > 4) return []; // 5桁以上は検索対象外
-
-    let found = employeeList.filter(emp => emp.plate === numOnly);
+// 照合ロジック
+function findAllMatches(num) {
+    if (!num || num.length > 4) return [];
+    // 完全一致
+    let found = employeeList.filter(e => e.plate === num);
     if (found.length > 0) return found;
-
-    if (numOnly.length < 4) {
-        const noZero = numOnly.replace(/^0+/, '');
-        if (noZero && noZero !== numOnly) {
-            found = employeeList.filter(emp => emp.plate === noZero);
-            if (found.length > 0) return found;
-        }
+    // 0埋め考慮 (例: "1" と読めたとき "0001" を探す)
+    if (num.length < 4) {
+        const zeroFilled = num.padStart(4, '0');
+        found = employeeList.filter(e => e.plate === zeroFilled || e.plate === num.replace(/^0+/, ''));
+        if (found.length > 0) return found;
     }
-
-    found = employeeList.filter(emp => 
-        numOnly.length >= 3 && 
-        emp.plate.length === numOnly.length && 
-        isSimilar(numOnly, emp.plate)
-    );
-
-    return found;
-}
-
-function isSimilar(s1, s2) {
-    let diff = 0;
-    for (let i = 0; i < s1.length; i++) { if (s1[i] !== s2[i]) diff++; }
-    return diff <= 1;
-}
-
-async function processFrame() {
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    const vW = video.videoWidth; const vH = video.videoHeight;
-    const frameW = vW * 0.8; const frameH = vW * 0.4;
-    canvas.width = 800; canvas.height = 400;
-    ctx.filter = "contrast(180%) grayscale(100%) brightness(95%)";
-    ctx.drawImage(video, (vW-frameW)/2, (vH-frameH)/2, frameW, frameH, 0, 0, 800, 400);
-    const result = await Tesseract.recognize(canvas, 'eng', { tessedit_char_whitelist: '0123456789', tessedit_pageseg_mode: '8' });
-    return result.data.text.replace(/[^0-9]/g, '');
+    return [];
 }
 
 async function takePhoto() {
-    if (isProcessing) return;
-    unlockAudio();
-    if (employeeList.length === 0) return alert("名簿CSVを選択してください");
+    if (isProcessing || employeeList.length === 0) return;
     isProcessing = true;
     statusDiv.innerText = "解析中...";
-    statusDiv.style.color = "#007AFF"; statusDiv.style.backgroundColor = "#eef";
+
+    const canvas = document.createElement('canvas');
+    const vW = video.videoWidth;
+    const vH = video.videoHeight;
     
-    let finalMatches = [];
-    let lastNum = "";
-    for (let i = 0; i < 3; i++) {
-        const num = await processFrame();
-        lastNum = num;
-        finalMatches = findAllMatches(num);
-        if (finalMatches.length > 0) break;
-        await new Promise(r => setTimeout(r, 150));
+    // ガイド枠の座標計算（中央の2:1の範囲）
+    const guideW = vW * 0.8;
+    const guideH = guideW * (165/330);
+    const startX = (vW - guideW) / 2;
+    const startY = (vH - guideH) / 2;
+
+    // --- 座標ベース切り抜きロジック ---
+    // ナンバープレートの横330:縦165に対し、大きな数字4桁エリアはおおよそ
+    // 横: 70/330(21%) 〜 315/330(95%)
+    // 縦: 65/165(39%) 〜 155/165(94%)
+    const cropX = startX + (guideW * (70 / 330));
+    const cropY = startY + (guideH * (65 / 165));
+    const cropW = guideW * (245 / 330);
+    const cropH = guideH * (90 / 165);
+
+    canvas.width = 600; // OCR用にリサイズ
+    canvas.height = canvas.width * (cropH / cropW);
+    const ctx = canvas.getContext('2d');
+    
+    // 鮮明化処理
+    ctx.filter = "contrast(150%) grayscale(100%)";
+    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
+    
+    // デバッグ表示
+    debugCanvas.width = canvas.width;
+    debugCanvas.height = canvas.height;
+    debugCanvas.getContext('2d').drawImage(canvas, 0, 0);
+
+    const result = await Tesseract.recognize(canvas, 'eng', { 
+        tessedit_char_whitelist: '0123456789',
+        tessedit_pageseg_mode: '7' // 1行として認識
+    });
+
+    const detected = result.data.text.replace(/[^0-9]/g, '');
+    const matches = findAllMatches(detected);
+
+    if (matches.length > 0) {
+        showResult(detected, matches, "match");
+    } else if (detected.length > 4 || detected === "") {
+        showResult(detected || "----", [], "error");
+    } else {
+        showResult(detected, [], "alert");
     }
 
-    // --- 桁数チェックと結果判定 ---
-    if (lastNum.length > 4) {
-        // 日本のナンバープレートに5桁以上の数字はないため、読み取り失敗とする
-        displayResults(lastNum, [{ id: "-", dept: "-", name: "(読み取り不能)" }], "error");
-    } else if (finalMatches.length > 0) {
-        displayResults(finalMatches[0].plate, finalMatches, "match");
-    } else if (lastNum === "") {
-        displayResults("----", [{ id: "-", dept: "-", name: "(読み取り不能)" }], "error");
-    } else {
-        displayResults(lastNum, [{ id: "-", dept: "-", name: "未登録" }], "alert");
-    }
     isProcessing = false;
 }
 
-function displayResults(plate, dataArray, type) {
-    infoDisplay.innerHTML = ""; 
-    
+function showResult(num, dataArray, type) {
+    infoDisplay.innerHTML = "";
     if (type === "match") {
-        statusDiv.innerText = dataArray.length > 1 ? `照合一致 (${dataArray.length}件)` : "照合一致";
-        statusDiv.style.color = "#007AFF"; statusDiv.style.backgroundColor = "#eef";
-        let names = [];
-        dataArray.forEach((data, index) => {
-            const group = document.createElement('div');
-            group.className = "match-group";
-            group.innerHTML = `<table class="info-table"><tr><th>ナンバー</th><td class="res-plate-num">${plate}${index===0 && dataArray.length>1 ? '<span class="multi-tag">重複</span>':''}</td></tr><tr><th>氏名</th><td>${data.name}</td></tr></table>`;
-            infoDisplay.appendChild(group);
-            names.push(data.name);
+        statusDiv.innerText = "照合一致";
+        statusDiv.style.backgroundColor = "#eef";
+        dataArray.forEach(data => {
+            infoDisplay.innerHTML += `
+                <table class="info-table">
+                    <tr><th>ナンバー</th><td class="res-plate-num">${num}</td></tr>
+                    <tr><th>氏名</th><td>${data.name}</td></tr>
+                    <tr><th>部署</th><td>${data.dept}</td></tr>
+                </table>`;
+            speak(data.name + "さん");
+            addHistory(num, data.name, "match");
         });
-        addHistory(plate, dataArray[0], "match", dataArray.length > 1);
-        speak(dataArray.length > 1 ? `該当者が${dataArray.length}名います。${names.join('さんと、')}さんです。` : names[0] + "さん");
-
     } else if (type === "error") {
-        // 5桁以上の際もここを通る
         statusDiv.innerText = "読み取り失敗";
-        statusDiv.style.color = "#856404"; statusDiv.style.backgroundColor = "#fff3cd";
-        const errorName = dataArray[0].name === "(桁数過多)" ? "数字が多すぎます" : "読み取れませんでした";
-        infoDisplay.innerHTML = `<table class="info-table"><tr><th>ナンバー</th><td class="res-plate-num">${plate}</td></tr><tr><th>氏名</th><td>${errorName}</td></tr></table>`;
-        addHistory(plate, { name: "読み取り不能", dept: "-" }, "error", false);
-        speak("読み取れませんでした。もう一度お願いします。");
-
+        infoDisplay.innerHTML = "枠に合わせて再撮影してください";
+        speak("もう一度お願いします");
     } else {
-        statusDiv.innerText = "【警告】未登録";
-        statusDiv.style.color = "#dc3545"; statusDiv.style.backgroundColor = "#fff5f5";
-        infoDisplay.innerHTML = `<table class="info-table"><tr><th>ナンバー</th><td class="res-plate-num">${plate}</td></tr><tr><th>氏名</th><td>未登録</td></tr></table>`;
-        addHistory(plate, dataArray[0], "alert", false);
+        statusDiv.innerText = "未登録";
+        infoDisplay.innerHTML = `<table class="info-table"><tr><th>ナンバー</th><td class="res-plate-num">${num}</td></tr><tr><th>氏名</th><td>未登録</td></tr></table>`;
         speak("未登録です");
+        addHistory(num, "未登録", "alert");
     }
 }
 
-function addHistory(num, data, type, isMulti) {
+function addHistory(num, name, type) {
     const card = document.createElement('div');
     card.className = `card ${type}`;
-    card.innerHTML = `<div><b>${num}</b> : ${data.name}${isMulti ? ' 他' : ''}</div><div style="font-size:11px; color:#999;">${new Date().toLocaleTimeString()}</div>`;
+    card.innerHTML = `<div><b>${num}</b> : ${name}</div><div style="font-size:10px; color:#999;">${new Date().toLocaleTimeString()}</div>`;
     historyItems.prepend(card);
-    if (historyItems.children.length > 10) historyItems.lastChild.remove();
 }
 
 function speak(t) {
     window.speechSynthesis.cancel();
-    setTimeout(() => {
-        const s = new SpeechSynthesisUtterance(t);
-        s.lang = 'ja-JP';
-        s.rate = 1.0;
-        window.speechSynthesis.speak(s);
-    }, 100);
+    const s = new SpeechSynthesisUtterance(t);
+    s.lang = 'ja-JP';
+    window.speechSynthesis.speak(s);
 }
 
+document.getElementById('execManual').onclick = () => {
+    const val = document.getElementById('manual-num-input').value;
+    const m = findAllMatches(val);
+    showResult(val, m, m.length > 0 ? "match" : "alert");
+    document.getElementById('manual-input-panel').style.display = "none";
+};
+document.getElementById('manualInputBtn').onclick = () => { document.getElementById('manual-input-panel').style.display = "block"; };
+document.getElementById('cancelManual').onclick = () => { document.getElementById('manual-input-panel').style.display = "none"; };
 shutter.onclick = takePhoto;
 window.onload = startCamera;
 </script>
