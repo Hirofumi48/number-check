@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（音声案内改善版）</title>
+    <title>車両照合（照合ロジック修正版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -55,7 +55,7 @@
         .card { background: white; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 8px solid #ccc; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .card.match { border-left-color: #28a745; }
         .card.alert { border-left-color: #dc3545; background: #fff5f5; }
-        .card.error { border-left-color: #ffc107; background: #fffdf5; } /* 読み取り不能用 */
+        .card.error { border-left-color: #ffc107; background: #fffdf5; }
     </style>
 </head>
 <body>
@@ -130,12 +130,16 @@ fileInput.addEventListener('change', (e) => {
         for (let i = 0; i < rows.length; i++) {
             const cols = rows[i].split(',');
             if (cols.length >= 2 && cols[0].trim() !== "") {
-                employeeList.push({
-                    plate: cols[0].replace(/[^0-9]/g, '').trim(), 
-                    id: cols[1] ? cols[1].trim() : "-",
-                    dept: cols[2] ? cols[2].trim() : "-",
-                    name: cols[3] ? cols[3].trim() : "不明"
-                });
+                // ナンバー列から数字だけを抽出
+                const plateNum = cols[0].replace(/[^0-9]/g, '').trim();
+                if (plateNum) {
+                    employeeList.push({
+                        plate: plateNum, 
+                        id: cols[1] ? cols[1].trim() : "-",
+                        dept: cols[2] ? cols[2].trim() : "-",
+                        name: cols[3] ? cols[3].trim() : "不明"
+                    });
+                }
             }
         }
         document.getElementById('file-status').innerText = `読込完了: ${employeeList.length}件`;
@@ -173,17 +177,35 @@ execManualBtn.onclick = async () => {
     }
 };
 
+// --- ここが修正の核心：照合ロジック ---
 function findAllMatches(detectedNum) {
     if (!detectedNum || employeeList.length === 0) return [];
     const numOnly = detectedNum.replace(/[^0-9]/g, '');
-    const candidates = [numOnly, numOnly.substring(1), numOnly.replace(/^0+/, '')];
-    let allFound = [];
-    for (const val of candidates) {
-        if (!val) continue;
-        const found = employeeList.filter(emp => emp.plate === val || (val.length === emp.plate.length && isSimilar(val, emp.plate)));
-        if (found.length > 0) { allFound = found; break; }
+    if (!numOnly) return [];
+
+    // 1. まずは「完全一致」を最優先で探す
+    let found = employeeList.filter(emp => emp.plate === numOnly);
+    if (found.length > 0) return found;
+
+    // 2. 4桁未満の場合、OCRの誤認（先頭の0が読めない等）を考慮して0を除去して再検索
+    // ※入力が4桁あるときは、別の3桁車と誤認させないため実行しない
+    if (numOnly.length < 4) {
+        const noZero = numOnly.replace(/^0+/, '');
+        if (noZero && noZero !== numOnly) {
+            found = employeeList.filter(emp => emp.plate === noZero);
+            if (found.length > 0) return found;
+        }
     }
-    return allFound;
+
+    // 3. 最後に「あいまい検索（1文字違い）」
+    // 誤認識リスクを下げるため「入力と名簿が同じ桁数」かつ「3桁以上」の場合のみ実行
+    found = employeeList.filter(emp => 
+        numOnly.length >= 3 && 
+        emp.plate.length === numOnly.length && 
+        isSimilar(numOnly, emp.plate)
+    );
+
+    return found;
 }
 
 function isSimilar(s1, s2) {
@@ -225,10 +247,8 @@ async function takePhoto() {
     if (finalMatches.length > 0) {
         displayResults(finalMatches[0].plate, finalMatches, "match");
     } else if (lastNum === "") {
-        // 全く読み取れなかった場合
         displayResults("----", [{ id: "-", dept: "-", name: "(読み取り不能)" }], "error");
     } else {
-        // 数字は出たが名簿にない場合
         displayResults(lastNum, [{ id: "-", dept: "-", name: "未登録" }], "alert");
     }
     isProcessing = false;
@@ -252,7 +272,6 @@ function displayResults(plate, dataArray, type) {
         speak(dataArray.length > 1 ? `該当者が${dataArray.length}名います。${names.join('さんと、')}さんです。` : names[0] + "さん");
 
     } else if (type === "error") {
-        // 読み取り失敗時
         statusDiv.innerText = "読み取り失敗";
         statusDiv.style.color = "#856404"; statusDiv.style.backgroundColor = "#fff3cd";
         infoDisplay.innerHTML = `<table class="info-table"><tr><th>ナンバー</th><td class="res-plate-num">----</td></tr><tr><th>氏名</th><td>読み取れませんでした</td></tr></table>`;
@@ -260,7 +279,6 @@ function displayResults(plate, dataArray, type) {
         speak("読み取れませんでした。もう一度お願いします。");
 
     } else {
-        // 未登録時
         statusDiv.innerText = "【警告】未登録";
         statusDiv.style.color = "#dc3545"; statusDiv.style.backgroundColor = "#fff5f5";
         infoDisplay.innerHTML = `<table class="info-table"><tr><th>ナンバー</th><td class="res-plate-num">${plate}</td></tr><tr><th>氏名</th><td>未登録</td></tr></table>`;
