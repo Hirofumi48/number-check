@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（3桁+4桁 試作版）</title>
+    <title>車両照合（地名・分類・一括 統合版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -14,21 +14,21 @@
             width: 70vw; height: 35vw; border: 3px solid #00FF00; border-radius: 12px;
             box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.5); pointer-events: none;
         }
-        #action-area { display: flex; justify-content: center; align-items: center; gap: 20px; margin: -40px auto 10px; position: relative; z-index: 100; }
+        #action-area { display: flex; justify-content: center; gap: 20px; margin: -40px auto 10px; position: relative; z-index: 100; }
         .shutter-btn { width: 80px; height: 80px; background: white; border: 6px solid #007AFF; border-radius: 50%; box-shadow: 0 4px 15px rgba(0,0,0,0.3); outline: none; }
         
-        #result-container { margin: 10px 15px; min-height: 120px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); text-align: left; }
-        #status { font-size: 14px; color: #007AFF; margin-bottom: 10px; font-weight: bold; text-align: center; background: #eef; padding: 5px; border-radius: 4px; }
+        #result-container { margin: 10px 15px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
+        #status { font-size: 14px; color: #007AFF; margin-bottom: 10px; font-weight: bold; background: #eef; padding: 5px; border-radius: 4px; }
         
-        .plate-display { text-align: center; margin: 10px 0; }
-        .sub-num { font-size: 18px; color: #666; margin-bottom: -5px; } /* 3桁部分 */
-        .main-num { font-size: 36px; font-weight: bold; color: #007AFF; letter-spacing: 2px; } /* 4桁部分 */
+        .plate-display { display: flex; flex-direction: column; align-items: center; line-height: 1.1; }
+        .plate-top { display: flex; align-items: baseline; gap: 10px; color: #444; font-size: 20px; font-weight: bold; }
+        .main-num { font-size: 42px; font-weight: bold; color: #007AFF; }
+        .warn-text { font-size: 10px; color: #d9534f; font-weight: normal; }
 
         #debug-area { background: #eee; padding: 10px; margin: 10px; font-size: 11px; border-radius: 8px; }
-        .debug-canvas { border: 1px solid #333; background: white; margin: 5px; height: 60px; width: auto; }
+        .debug-canvas { border: 1px solid #333; background: white; margin: 2px; height: 50px; }
         
-        #history-area { margin: 15px; text-align: left; }
-        .card { background: white; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 8px solid #ccc; display: flex; justify-content: space-between; align-items: center; }
+        .card { background: white; padding: 12px; border-radius: 8px; margin: 8px 15px; border-left: 8px solid #ccc; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .card.match { border-left-color: #28a745; }
         .card.alert { border-left-color: #dc3545; }
     </style>
@@ -40,25 +40,24 @@
         <div id="focus-guide"></div>
     </div>
     
-    <div id="action-area">
-        <button id="shutter" class="shutter-btn"></button>
-    </div>
+    <div id="action-area"><button id="shutter" class="shutter-btn"></button></div>
 
     <div style="margin: 15px;">
         <label style="background: #34c759; color: white; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 13px;">
             名簿(CSV)選択<input type="file" id="fileInput" accept=".csv" style="display:none;">
         </label>
-        <div id="file-status" style="font-size: 11px; color: #666; margin-top: 5px;">名簿を読み込んでください</div>
+        <div id="file-status" style="font-size: 11px; color: #666; margin-top: 5px;">名簿読込待機中</div>
     </div>
 
     <div id="result-container">
-        <div id="status">準備完了</div>
+        <div id="status">Ready</div>
         <div id="info-display"></div>
     </div>
 
     <div id="debug-area">
-        【読取りプレビュー：上段(3桁) / 下段(4桁)】<br>
-        <canvas id="canvas-sub" class="debug-canvas"></canvas><br>
+        【読取り：地名 / 分類 / 4桁】<br>
+        <canvas id="canvas-area" class="debug-canvas"></canvas>
+        <canvas id="canvas-sub" class="debug-canvas"></canvas>
         <canvas id="canvas-main" class="debug-canvas"></canvas>
     </div>
 
@@ -69,19 +68,37 @@ const video = document.getElementById('video');
 const shutter = document.getElementById('shutter');
 const statusDiv = document.getElementById('status');
 const infoDisplay = document.getElementById('info-display');
-const canvasSub = document.getElementById('canvas-sub');
-const canvasMain = document.getElementById('canvas-main');
 const historyItems = document.getElementById('history-items');
 const fileInput = document.getElementById('fileInput');
 
+const canvasArea = document.getElementById('canvas-area');
+const canvasSub = document.getElementById('canvas-sub');
+const canvasMain = document.getElementById('canvas-main');
+
 let employeeList = [];
 let isProcessing = false;
+
+// 芳岡さん提供の地名リスト
+const areaList = ["札幌","函館","旭川","室蘭","苫小牧","釧路","知床","帯広","十勝","北見","青森","弘前","八戸","岩手","盛岡","平泉","宮城","仙台","秋田","山形","庄内","福島","会津","郡山","白河","いわき","水戸","土浦","つくば","宇都宮","日光","那須","とちぎ","群馬","高崎","前橋","千葉","成田","野田","柏","松戸","習志野","船橋","市川","袖ヶ浦","市原","大宮","川口","熊谷","春日部","越谷","所沢","川越","品川","世田谷","足立","江東","葛飾","江戸川","練馬","杉並","板橋","多摩","八王子","横浜","川崎","相模","湘南","山梨","富士山","新潟","長岡","上越","長野","松本","諏訪","南信州","安曇野","富山","石川","金沢","名古屋","三河","岡崎","豊田","尾張小牧","一宮","春日井","豊橋","静岡","沼津","伊豆","浜松","岐阜","飛騨","三重","鈴鹿","四日市","伊勢志摩","福井","大阪","なにわ","和泉","堺","京都","奈良","飛鳥","滋賀","和歌山","神戸","姫路","広島","福山","鳥取","島根","出雲","岡山","倉敷","山口","下関","徳島","香川","高松","愛媛","高知","福岡","北九州","筑豊","久留米","佐賀","長崎","佐世保","熊本","大分","宮崎","鹿児島","奄美","沖縄"];
 
 function speak(t) {
     window.speechSynthesis.cancel();
     const s = new SpeechSynthesisUtterance(t);
     s.lang = 'ja-JP';
     window.speechSynthesis.speak(s);
+}
+
+// 曖昧な地名をリストと照合して補正する
+function fixAreaName(rawText) {
+    if (!rawText) return "??";
+    let bestMatch = rawText;
+    let maxScore = 0;
+    areaList.forEach(area => {
+        let score = 0;
+        for(let char of rawText) if(area.includes(char)) score++;
+        if(score > maxScore) { maxScore = score; bestMatch = area; }
+    });
+    return maxScore > 0 ? bestMatch : rawText;
 }
 
 fileInput.addEventListener('change', (e) => {
@@ -100,85 +117,75 @@ fileInput.addEventListener('change', (e) => {
 });
 
 async function startCamera() {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 } } });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280 } });
     video.srcObject = stream;
 }
 
-async function ocrScan(canvas, psm) {
-    const result = await Tesseract.recognize(canvas, 'eng', {
-        tessedit_char_whitelist: '0123456789',
-        tessedit_pageseg_mode: psm
-    });
-    return result.data.text.replace(/[^0-9]/g, '').trim();
+async function ocrScan(canvas, lang, psm, whitelist) {
+    const options = { tessedit_pageseg_mode: psm };
+    if(whitelist) options.tessedit_char_whitelist = whitelist;
+    const result = await Tesseract.recognize(canvas, lang, options);
+    return result.data.text.trim();
 }
 
 shutter.onclick = async () => {
     if (isProcessing || employeeList.length === 0) return;
     isProcessing = true;
-    statusDiv.innerText = "同時解析中...";
+    statusDiv.innerText = "地名・数字 全解析中...";
     
-    const vW = video.videoWidth;
-    const vH = video.videoHeight;
-    const guideW = vW * 0.7; 
-    const guideH = guideW * (165/330);
-    const startX = (vW - guideW) / 2;
-    const startY = (vH - guideH) / 2;
+    const vW = video.videoWidth; const vH = video.videoHeight;
+    const gW = vW * 0.7; const gH = gW * (165/330);
+    const sX = (vW - gW) / 2; const sY = (vH - gH) / 2;
 
-    // 座標定義
-    const rectMain = { x: 59, y: 56, w: 264, h: 103 };  // 4桁メイン
-    const rectSub  = { x: 169, y: 6,  w: 95,  h: 54 };  // 3桁分類 (264-169=95, 60-6=54)
+    const coords = {
+        main: { x: 59,  y: 56, w: 264, h: 103 },
+        sub:  { x: 169, y: 6,  w: 95,  h: 54  },
+        area: { x: 72,  y: 6,  w: 102, h: 54  } // 174-72=102
+    };
 
-    // メイン4桁の切り出し
-    const ctxMain = canvasMain.getContext('2d');
-    canvasMain.width = 500; canvasMain.height = 200;
-    ctxMain.filter = "contrast(180%) grayscale(100%)";
-    ctxMain.drawImage(video, startX + (guideW*(rectMain.x/330)), startY + (guideH*(rectMain.y/165)), guideW*(rectMain.w/330), guideH*(rectMain.h/165), 0, 0, 500, 200);
+    const draw = (cvs, rect, w, h) => {
+        cvs.width = w; cvs.height = h;
+        const ctx = cvs.getContext('2d');
+        ctx.filter = "contrast(180%) grayscale(100%)";
+        ctx.drawImage(video, sX+(gW*(rect.x/330)), sY+(gH*(rect.y/165)), gW*(rect.w/330), gH*(rect.h/165), 0, 0, w, h);
+    };
 
-    // 分類3桁の切り出し
-    const ctxSub = canvasSub.getContext('2d');
-    canvasSub.width = 300; canvasSub.height = 150;
-    ctxSub.filter = "contrast(180%) grayscale(100%)";
-    ctxSub.drawImage(video, startX + (guideW*(rectSub.x/330)), startY + (guideH*(rectSub.y/165)), guideW*(rectSub.w/330), guideH*(rectSub.h/165), 0, 0, 300, 150);
+    draw(canvasMain, coords.main, 500, 200);
+    draw(canvasSub,  coords.sub,  250, 150);
+    draw(canvasArea, coords.area, 250, 150);
 
-    // OCR実行 (同時並行)
-    const [numMain, numSub] = await Promise.all([
-        ocrScan(canvasMain, '7'),
-        ocrScan(canvasSub, '7')
+    // 解析（日本語と数字）
+    const [rawMain, rawSub, rawArea] = await Promise.all([
+        ocrScan(canvasMain, 'eng', '7', '0123456789'),
+        ocrScan(canvasSub,  'eng', '7', '0123456789'),
+        ocrScan(canvasArea, 'jpn', '7')
     ]);
 
+    const numMain = rawMain.replace(/[^0-9]/g, '');
+    let numSub = rawSub.replace(/[^0-9]/g, '');
+    let subWarn = "";
+    if(numSub.length > 3) { subWarn = "!"; numSub = numSub.slice(-3); } // 4桁以上なら末尾3つ
+
+    const areaName = fixAreaName(rawArea);
     const matches = employeeList.filter(emp => emp.plate === numMain);
     
-    if (matches.length > 0) {
-        statusDiv.innerText = "照合一致";
-        infoDisplay.innerHTML = `
-            <div class="plate-display">
-                <div class="sub-num">${numSub || "---"}</div>
-                <div class="main-num">${numMain}</div>
-                <div style="font-size:20px; margin-top:10px;">${matches[0].name}さん</div>
-            </div>`;
-        speak(matches[0].name + "さん");
-        addHistory(numMain, numSub, matches[0].name, "match");
-    } else {
-        statusDiv.innerText = numMain ? "未登録" : "読み取り失敗";
-        infoDisplay.innerHTML = `
-            <div class="plate-display">
-                <div class="sub-num">${numSub || "---"}</div>
-                <div class="main-num">${numMain || "----"}</div>
-            </div>`;
-        speak(numMain ? "未登録です" : "もう一度");
-        if(numMain) addHistory(numMain, numSub, "未登録", "alert");
-    }
+    statusDiv.innerText = matches.length > 0 ? "照合一致" : "照合なし";
+    infoDisplay.innerHTML = `
+        <div class="plate-display">
+            <div class="plate-top">${areaName} ${numSub}<span class="warn-text">${subWarn}</span></div>
+            <div class="main-num">${numMain || "----"}</div>
+            <div style="font-size:20px; margin-top:5px; font-weight:bold;">${matches[0]?.name || (numMain ? "未登録" : "失敗")}さん</div>
+        </div>`;
+
+    speak(matches[0] ? matches[0].name + "さん" : (numMain ? "未登録です" : "もう一度"));
+    
+    const card = document.createElement('div');
+    card.className = `card ${matches[0] ? 'match' : 'alert'}`;
+    card.innerHTML = `<div>${areaName}${numSub} <b>${numMain}</b> : ${matches[0]?.name || "未登録"}</div>`;
+    historyItems.prepend(card);
 
     isProcessing = false;
 };
-
-function addHistory(main, sub, name, type) {
-    const card = document.createElement('div');
-    card.className = `card ${type}`;
-    card.innerHTML = `<div>[${sub||'???'}] <b>${main}</b> : ${name}</div><div style="font-size:11px; color:#999;">${new Date().toLocaleTimeString()}</div>`;
-    historyItems.prepend(card);
-    if (historyItems.children.length > 10) historyItems.lastChild.remove();
-}
 
 window.onload = startCamera;
 </script>
