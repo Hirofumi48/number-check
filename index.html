@@ -3,23 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（完成度向上版）</title>
+    <title>車両照合（ワイルドカード・手動補完版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
-        #camera-container { position: sticky; top: 0; background: #000; height: 35vh; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+        #camera-container { position: sticky; top: 0; background: #000; height: 30vh; overflow: hidden; display: flex; align-items: center; justify-content: center; }
         #video { width: 100%; height: 100%; object-fit: cover; }
         #focus-guide {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             width: 70vw; height: 35vw; border: 3px solid #00FF00; border-radius: 12px;
             box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.5); pointer-events: none;
         }
-        #action-area { display: flex; justify-content: center; margin: -40px auto 10px; position: relative; z-index: 100; }
-        .shutter-btn { width: 80px; height: 80px; background: white; border: 6px solid #007AFF; border-radius: 50%; font-weight:bold; }
+        #action-area { display: flex; justify-content: center; margin: -30px auto 10px; position: relative; z-index: 100; }
+        .shutter-btn { width: 70px; height: 70px; background: white; border: 6px solid #007AFF; border-radius: 50%; font-weight:bold; cursor: pointer; }
+        
         #result-container { margin: 10px 15px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
-        #status { font-size: 14px; color: #007AFF; font-weight: bold; background: #eef; padding: 5px; border-radius: 4px; }
-        .main-num { font-size: 48px; font-weight: bold; color: #007AFF; }
-        .debug-canvas { border: 1px solid #333; background: white; margin: 2px; height: 45px; }
+        .plate-box { background: #eee; padding: 10px; border-radius: 8px; margin-bottom: 10px; }
+        .plate-top { font-size: 20px; font-weight: bold; color: #555; }
+        .plate-main { font-size: 40px; font-weight: bold; color: #007AFF; }
+        
+        #status { font-size: 14px; color: #007AFF; font-weight: bold; margin-bottom: 10px; }
+        .match-item { background: #e8f5e9; border: 2px solid #4caf50; padding: 10px; border-radius: 8px; margin-top: 5px; text-align: left; }
+        .no-match { background: #ffebee; border: 2px solid #f44336; padding: 10px; border-radius: 8px; margin-top: 5px; }
+        
+        #manual-input-area { margin-top: 15px; border-top: 1px dashed #ccc; padding-top: 10px; }
+        input[type="number"] { font-size: 20px; width: 120px; padding: 5px; border-radius: 4px; border: 1px solid #ccc; }
+        .btn-small { padding: 8px 15px; border-radius: 4px; border: none; background: #007AFF; color: white; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -29,20 +38,24 @@
     <div id="focus-guide"></div>
 </div>
 
-<div id="action-area"><button id="shutter" class="shutter-btn">照合</button></div>
+<div id="action-area"><button id="shutter" class="shutter-btn">撮影</button></div>
 
 <div id="result-container">
     <div id="status">Ready</div>
-    <div id="info-display"></div>
-    <input type="file" id="fileInput" accept=".csv" style="display:none;">
-    <button onclick="document.getElementById('fileInput').click()" style="background:#34c759; color:white; padding:8px 16px; border:none; border-radius:8px; font-weight:bold; margin-top:10px;">名簿CSV選択</button>
-</div>
+    <div id="info-display">
+        <div class="plate-box">
+            <div class="plate-top">？？ ??</div>
+            <div class="plate-main">----</div>
+        </div>
+    </div>
 
-<div id="debug-area" style="font-size:10px;">
-    【解析プレビュー】<br>
-    <canvas id="canvas-area" class="debug-canvas"></canvas>
-    <canvas id="canvas-sub" class="debug-canvas"></canvas>
-    <canvas id="canvas-main" class="debug-canvas"></canvas>
+    <div id="manual-input-area">
+        <input type="number" id="manualNum" placeholder="4桁数字">
+        <button onclick="manualSearch()" class="btn-small">手動検索</button>
+    </div>
+
+    <input type="file" id="fileInput" accept=".csv" style="display:none;">
+    <button onclick="document.getElementById('fileInput').click()" style="background:#34c759; color:white; padding:8px 16px; border:none; border-radius:8px; font-weight:bold; margin-top:15px; width: 100%;">名簿CSVを読み込む</button>
 </div>
 
 <div id="history-items"></div>
@@ -55,59 +68,75 @@ const infoDisplay = document.getElementById('info-display');
 const historyItems = document.getElementById('history-items');
 const fileInput = document.getElementById('fileInput');
 
-const canvases = { area: document.getElementById('canvas-area'), sub: document.getElementById('canvas-sub'), main: document.getElementById('canvas-main') };
 let employeeList = [];
 let isProcessing = false;
 
-// 全国の地名リスト
-const areaList = ["札幌","函館","旭川","室蘭","苫小牧","釧路","知床","帯広","十勝","北見","青森","弘前","八戸","岩手","盛岡","平泉","宮城","仙台","秋田","山形","庄内","福島","会津","郡山","白河","いわき","水戸","土浦","つくば","宇都宮","日光","那須","とちぎ","群馬","高崎","前橋","千葉","成田","野田","柏","松戸","習志野","船橋","市川","袖ヶ浦","市原","大宮","川口","熊谷","春日部","越谷","所沢","川越","品川","世田谷","足立","江東","葛飾","江戸川","練馬","杉並","板橋","多摩","八王子","横浜","川崎","相模","湘南","山梨","富士山","新潟","長岡","上越","長野","松本","諏訪","南信州","安曇野","富山","石川","金沢","名古屋","三河","岡崎","豊田","尾張小牧","一宮","春日井","豊橋","静岡","沼津","伊豆","浜松","岐阜","飛騨","三重","鈴鹿","四日市","伊勢志摩","福井","大阪","なにわ","和泉","堺","京都","奈良","飛鳥","滋賀","和歌山","神戸","姫路","広島","福山","鳥取","島根","出雲","岡山","倉敷","山口","下関","徳島","香川","高松","愛媛","高知","福岡","北九州","筑豊","久留米","佐賀","長崎","佐世保","熊本","大分","宮崎","鹿児島","奄美","沖縄"];
+// 地域特性に合わせて「那須」と「宇都宮」を強めに
+const commonAreas = ["那須", "宇都宮"];
+const otherAreas = ["とちぎ", "日光", "静岡", "和泉", "水戸", "土浦", "福島"];
 
 function fixAreaName(rawText) {
     if (!rawText) return "??";
-    // 誤読しやすい漢字の個別置換（酪->静、子->宇など）
-    let clean = rawText.replace(/酪/g, '静').replace(/子/g, '宇').replace(/旨/g, '宮');
-    let bestMatch = clean, maxScore = 0;
-    areaList.forEach(area => {
+    // 特定の誤読パターンを補正
+    let clean = rawText.replace(/[子酪旨和]/g, m => ({'子':'宇','酪':'静','旨':'宮','和':'宇'})[m] || m);
+    
+    // まず優先地域をチェック
+    for(let a of commonAreas) {
         let score = 0;
-        for(let char of clean) if(area.includes(char)) score++;
-        if(score > maxScore && score >= (area.length * 0.5)) { maxScore = score; bestMatch = area; }
-    });
-    return bestMatch;
+        for(let char of clean) if(a.includes(char)) score++;
+        if(score >= 1) return a; 
+    }
+    // その他
+    for(let a of otherAreas) {
+        if(clean.includes(a[0]) || clean.includes(a[1])) return a;
+    }
+    return "??";
 }
 
-// 数字のノイズ（ドットの誤読）を消去するフィルター
 function cleanNumber(text, limit) {
     let num = text.replace(/[^0-9]/g, '');
-    if (!num) return "";
-    // 桁数が多すぎる場合は、ナンバープレートの右寄せ性質を利用して「後ろから」取る
-    return num.length > limit ? num.slice(-limit) : num;
+    if (!num || num.length > 5) return "??"; // 5桁以上はノイズとして捨てる
+    return num;
 }
 
-fileInput.onchange = (e) => {
-    const reader = new FileReader();
-    reader.onload = (event) => {
-        employeeList = event.target.result.split('\n').filter(r => r.trim()).map(row => {
-            const cols = row.split(',');
-            return { plate: (cols[0]||"").replace(/[^0-9]/g, '').trim(), name: (cols[3]||"不明").trim() };
-        }).filter(e => e.plate !== "");
-        statusDiv.innerText = "名簿読込完了";
-    };
-    reader.readAsText(e.target.files[0], 'UTF-8');
-};
-
-async function startCamera() {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280 } });
-    video.srcObject = stream;
+function searchEmployee(plateNum) {
+    if (!plateNum || plateNum === "??") return [];
+    return employeeList.filter(emp => emp.plate === plateNum);
 }
 
-async function deepScan(canvas, lang, psm, whitelist) {
+function displayResults(area, sub, main) {
+    const matches = searchEmployee(main);
+    let html = `
+        <div class="plate-box">
+            <div class="plate-top">${area} ${sub}</div>
+            <div class="plate-main">${main}</div>
+        </div>`;
+
+    if (matches.length > 0) {
+        matches.forEach(m => {
+            html += `<div class="match-item"><b>一致: ${m.name}</b><br><small>名簿登録: ${m.plate}</small></div>`;
+        });
+        speak(matches[0].name + "さんです");
+    } else if (main !== "??") {
+        html += `<div class="no-match">該当者なし (${main})</div>`;
+        speak("該当なし");
+    }
+
+    infoDisplay.innerHTML = html;
+    document.getElementById('manualNum').value = (main === "??" ? "" : main);
+}
+
+function manualSearch() {
+    const num = document.getElementById('manualNum').value;
+    if (num) displayResults("手動入力", "--", num);
+}
+
+async function deepScan(canvas, psm, whitelist) {
     const worker = await Tesseract.createWorker();
-    await worker.loadLanguage(lang);
-    await worker.initialize(lang);
-    await worker.setParameters({
-        tessedit_char_whitelist: whitelist || '',
-        tessedit_pageseg_mode: psm,
-    });
+    await worker.loadLanguage(psm === '7' ? 'jpn' : 'eng');
+    await worker.initialize(psm === '7' ? 'jpn' : 'eng');
+    if(whitelist) await worker.setParameters({ tessedit_char_whitelist: whitelist });
+    await worker.setParameters({ tessedit_pageseg_mode: psm });
     const result = await worker.recognize(canvas);
     await worker.terminate();
     return result.data.text.trim();
@@ -118,55 +147,64 @@ shutter.onclick = async () => {
     isProcessing = true;
     statusDiv.innerText = "スキャン中...";
 
+    const canvas = document.createElement('canvas');
     const vW = video.videoWidth, vH = video.videoHeight;
     const gW = vW * 0.7, gH = gW * (165/330);
     const sX = (vW - gW) / 2, sY = (vH - gH) / 2;
 
-    const draw = (cvs, rect, w, h, contrast) => {
-        cvs.width = w + 40; cvs.height = h + 40;
-        const ctx = cvs.getContext('2d');
-        ctx.fillStyle = "white"; ctx.fillRect(0, 0, cvs.width, cvs.height);
+    const getCrop = (rect, contrast) => {
+        const c = document.createElement('canvas');
+        c.width = rect.w * 2; c.height = rect.h * 2;
+        const ctx = c.getContext('2d');
         ctx.filter = `contrast(${contrast}%) grayscale(100%)`;
-        ctx.drawImage(video, sX+(gW*(rect.x/330)), sY+(gH*(rect.y/165)), gW*(rect.w/330), gH*(rect.h/165), 20, 20, w, h);
+        ctx.drawImage(video, sX+(gW*(rect.x/330)), sY+(gH*(rect.y/165)), gW*(rect.w/330), gH*(rect.h/165), 0, 0, c.width, c.height);
+        return c;
     };
 
-    // 宇都宮対策：地名枠を少しだけ狭め、3桁番号との境界を明確にする
-    const coords = { area: { x: 71, y: 6, w: 100, h: 54 }, sub: { x: 178, y: 6, w: 86, h: 54 }, main: { x: 59, y: 56, w: 264, h: 103 } };
-    
-    draw(canvases.area, coords.area, 300, 150, 180);
-    draw(canvases.sub,  coords.sub,  250, 150, 220);
-    draw(canvases.main, coords.main, 600, 240, 220);
+    const cArea = getCrop({ x: 71, y: 6, w: 100, h: 54 }, 180);
+    const cSub  = getCrop({ x: 178, y: 6, w: 86, h: 54 }, 220);
+    const cMain = getCrop({ x: 59, y: 56, w: 264, h: 103 }, 220);
 
-    const [rawArea, rawSub, rawMain] = await Promise.all([
-        deepScan(canvases.area, 'jpn', '7'),
-        deepScan(canvases.sub,  'eng', '8', '0123456789'),
-        deepScan(canvases.main, 'eng', '8', '0123456789')
+    const [rArea, rSub, rMain] = await Promise.all([
+        deepScan(cArea, '7'),
+        deepScan(cSub, '8', '0123456789'),
+        deepScan(cMain, '8', '0123456789')
     ]);
 
-    const areaName = fixAreaName(rawArea);
-    const numSub = cleanNumber(rawSub, 3);
-    const numMain = cleanNumber(rawMain, 4);
-    
-    const matches = employeeList.filter(emp => emp.plate === numMain);
-    
-    statusDiv.innerText = matches.length > 0 ? "照合一致" : "照合なし";
-    infoDisplay.innerHTML = `<div class="plate-display">
-        <div class="plate-top">${areaName} ${numSub}</div>
-        <div class="main-num">${numMain || "----"}</div>
-        <div style="font-size:22px; font-weight:bold;">${matches[0]?.name || (numMain ? "未登録" : "失敗")}</div>
-    </div>`;
+    const area = fixAreaName(rArea);
+    const sub = cleanNumber(rSub, 3);
+    const main = cleanNumber(rMain, 4);
 
-    window.speechSynthesis.cancel();
-    const s = new SpeechSynthesisUtterance(matches[0] ? matches[0].name + "さん" : (numMain ? "未登録" : "失敗"));
-    s.lang = 'ja-JP'; window.speechSynthesis.speak(s);
-
-    const card = document.createElement('div');
-    card.style = "background:white; padding:10px; border-radius:8px; margin:5px 15px; border-left:8px solid " + (matches[0]?'#28a745':'#ccc');
-    card.innerHTML = `<span>${areaName}${numSub} ${numMain}</span> <span style="float:right">${matches[0]?.name || "未登録"}</span>`;
-    historyItems.prepend(card);
-
+    displayResults(area, sub, main);
     isProcessing = false;
+    statusDiv.innerText = "完了";
 };
+
+fileInput.onchange = (e) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        employeeList = event.target.result.split('\n').filter(r => r.trim()).map(row => {
+            const cols = row.split(',');
+            return { plate: (cols[0]||"").replace(/[^0-9]/g, '').trim(), name: (cols[3]||"不明").trim() };
+        });
+        statusDiv.innerText = "名簿読み込み完了: " + (employeeList.length - 1) + "名";
+    };
+    reader.readAsText(e.target.files[0], 'UTF-8');
+};
+
+function speak(t) {
+    window.speechSynthesis.cancel();
+    const s = new SpeechSynthesisUtterance(t);
+    s.lang = 'ja-JP';
+    window.speechSynthesis.speak(s);
+}
+
+async function startCamera() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280 } });
+        video.srcObject = stream;
+    } catch (e) { statusDiv.innerText = "カメラ起動失敗"; }
+}
 
 window.onload = startCamera;
 </script>
