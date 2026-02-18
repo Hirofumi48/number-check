@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（安定性重視・原点回帰版）</title>
+    <title>車両照合（トリプルスキャン安定版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -15,14 +15,11 @@
             box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.5); pointer-events: none;
         }
         #action-area { display: flex; justify-content: center; margin: -40px auto 10px; position: relative; z-index: 100; }
-        .shutter-btn { width: 80px; height: 80px; background: white; border: 6px solid #007AFF; border-radius: 50%; }
+        .shutter-btn { width: 80px; height: 80px; background: white; border: 6px solid #007AFF; border-radius: 50%; font-weight:bold; }
         #result-container { margin: 10px 15px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
-        #status { font-size: 14px; color: #007AFF; font-weight: bold; background: #eef; padding: 5px; margin-bottom: 10px; border-radius: 4px; }
-        .plate-display { display: flex; flex-direction: column; align-items: center; }
-        .plate-top { color: #444; font-size: 22px; font-weight: bold; }
+        #status { font-size: 14px; color: #007AFF; font-weight: bold; background: #eef; padding: 5px; border-radius: 4px; }
         .main-num { font-size: 48px; font-weight: bold; color: #007AFF; }
-        #debug-area { background: #eee; padding: 10px; margin: 10px; font-size: 11px; border-radius: 8px; }
-        .debug-canvas { border: 1px solid #333; background: white; margin: 2px; height: 50px; }
+        .debug-canvas { border: 1px solid #333; background: white; margin: 2px; height: 45px; }
     </style>
 </head>
 <body>
@@ -32,7 +29,7 @@
     <div id="focus-guide"></div>
 </div>
 
-<div id="action-area"><button id="shutter" class="shutter-btn"></button></div>
+<div id="action-area"><button id="shutter" class="shutter-btn">照合</button></div>
 
 <div id="result-container">
     <div id="status">Ready</div>
@@ -41,8 +38,8 @@
     <button onclick="document.getElementById('fileInput').click()" style="background:#34c759; color:white; padding:8px 16px; border:none; border-radius:8px; font-weight:bold; margin-top:10px;">名簿CSV選択</button>
 </div>
 
-<div id="debug-area">
-    【解析プレビュー：原物そのまま＋白枠】<br>
+<div id="debug-area" style="font-size:10px;">
+    【解析プレビュー】<br>
     <canvas id="canvas-area" class="debug-canvas"></canvas>
     <canvas id="canvas-sub" class="debug-canvas"></canvas>
     <canvas id="canvas-main" class="debug-canvas"></canvas>
@@ -58,10 +55,7 @@ const infoDisplay = document.getElementById('info-display');
 const historyItems = document.getElementById('history-items');
 const fileInput = document.getElementById('fileInput');
 
-const canvasArea = document.getElementById('canvas-area');
-const canvasSub = document.getElementById('canvas-sub');
-const canvasMain = document.getElementById('canvas-main');
-
+const canvases = { area: document.getElementById('canvas-area'), sub: document.getElementById('canvas-sub'), main: document.getElementById('canvas-main') };
 let employeeList = [];
 let isProcessing = false;
 
@@ -73,16 +67,10 @@ function fixAreaName(rawText) {
     areaList.forEach(area => {
         let score = 0;
         for(let char of rawText) if(area.includes(char)) score++;
-        if(score > maxScore && score >= (area.length / 2)) { maxScore = score; bestMatch = area; }
+        // 宇都宮対策：2文字以上一致、かつ全体の6割以上一致で補正
+        if(score > maxScore && score >= 2 && score >= (area.length * 0.6)) { maxScore = score; bestMatch = area; }
     });
     return bestMatch;
-}
-
-function speak(t) {
-    window.speechSynthesis.cancel();
-    const s = new SpeechSynthesisUtterance(t);
-    s.lang = 'ja-JP';
-    window.speechSynthesis.speak(s);
 }
 
 fileInput.onchange = (e) => {
@@ -102,62 +90,68 @@ async function startCamera() {
     video.srcObject = stream;
 }
 
-async function ocrScan(canvas, lang, psm, whitelist) {
-    const options = { tessedit_pageseg_mode: psm };
-    if(whitelist) options.tessedit_char_whitelist = whitelist;
-    const result = await Tesseract.recognize(canvas, lang, options);
-    return result.data.text.replace(/[^0-9]/g, '').trim();
+// 読み取りの「粘り」を強化したOCR関数
+async function deepScan(canvas, lang, psm, whitelist) {
+    const worker = await Tesseract.createWorker();
+    await worker.loadLanguage(lang);
+    await worker.initialize(lang);
+    await worker.setParameters({
+        tessedit_char_whitelist: whitelist || '',
+        tessedit_pageseg_mode: psm,
+        // 1桁や細い文字を拾うためのパラメータ
+        tessjs_create_hocr: '0',
+        tessjs_create_tsv: '0',
+    });
+    const result = await worker.recognize(canvas);
+    await worker.terminate();
+    return result.data.text.replace(/[^0-9\u4e00-\u9faf\u3040-\u309f]/g, '').trim();
 }
 
 shutter.onclick = async () => {
-    if (isProcessing || employeeList.length === 0) {
-        if(employeeList.length === 0) alert("名簿CSVを選択してください");
-        return;
-    }
+    if (isProcessing || employeeList.length === 0) return;
     isProcessing = true;
-    statusDiv.innerText = "解析中...";
+    statusDiv.innerText = "精密スキャン中...";
 
     const vW = video.videoWidth, vH = video.videoHeight;
     const gW = vW * 0.7, gH = gW * (165/330);
     const sX = (vW - gW) / 2, sY = (vH - gH) / 2;
 
-    const coords = {
-        area: { x: 71,  y: 6,  w: 108, h: 54 },
-        sub:  { x: 176, y: 6,  w: 88,  h: 54 },
-        main: { x: 59,  y: 56, w: 264, h: 103 }
-    };
-
-    const draw = (cvs, rect, w, h) => {
-        cvs.width = w + 60; cvs.height = h + 60; // 広めの白枠
+    const draw = (cvs, rect, w, h, contrast) => {
+        cvs.width = w + 80; cvs.height = h + 80;
         const ctx = cvs.getContext('2d');
         ctx.fillStyle = "white"; ctx.fillRect(0, 0, cvs.width, cvs.height);
-        ctx.filter = "contrast(180%) grayscale(100%)";
-        ctx.drawImage(video, sX+(gW*(rect.x/330)), sY+(gH*(rect.y/165)), gW*(rect.w/330), gH*(rect.h/165), 30, 30, w, h);
+        ctx.filter = `contrast(${contrast}%) grayscale(100%) brightness(90%)`;
+        ctx.drawImage(video, sX+(gW*(rect.x/330)), sY+(gH*(rect.y/165)), gW*(rect.w/330), gH*(rect.h/165), 40, 40, w, h);
     };
 
-    draw(canvasArea, coords.area, 300, 150);
-    draw(canvasSub,  coords.sub,  250, 150);
-    draw(canvasMain, coords.main, 600, 240);
+    const coords = { area: { x: 71, y: 6, w: 108, h: 54 }, sub: { x: 176, y: 6, w: 88, h: 54 }, main: { x: 59, y: 56, w: 264, h: 103 } };
+    
+    // 描画（コントラストを250%まで強化）
+    draw(canvases.area, coords.area, 300, 150, 200);
+    draw(canvases.sub,  coords.sub,  250, 150, 250);
+    draw(canvases.main, coords.main, 600, 240, 250);
 
+    // 解析（地名は単一行モード7、数字は単一単語モード8）
     const [rawArea, numSub, numMain] = await Promise.all([
-        Tesseract.recognize(canvasArea, 'jpn', {tessedit_pageseg_mode: '7'}).then(r => r.data.text.trim()),
-        ocrScan(canvasSub, 'eng', '8', '0123456789'),
-        ocrScan(canvasMain, 'eng', '7', '0123456789') // 原点回帰: PSM 7
+        deepScan(canvases.area, 'jpn', '7'),
+        deepScan(canvases.sub,  'eng', '8', '0123456789'),
+        deepScan(canvases.main, 'eng', '8', '0123456789')
     ]);
 
     const areaName = fixAreaName(rawArea);
     const matches = employeeList.filter(emp => emp.plate === numMain);
     
     statusDiv.innerText = matches.length > 0 ? "照合一致" : "照合なし";
-    infoDisplay.innerHTML = `
-        <div class="plate-display">
-            <div class="plate-top">${areaName} ${numSub}</div>
-            <div class="main-num">${numMain || "----"}</div>
-            <div style="font-size:22px; font-weight:bold;">${matches[0]?.name || (numMain ? "未登録" : "読取失敗")}</div>
-        </div>`;
+    infoDisplay.innerHTML = `<div class="plate-display">
+        <div class="plate-top">${areaName} ${numSub}</div>
+        <div class="main-num">${numMain || "----"}</div>
+        <div style="font-size:22px; font-weight:bold;">${matches[0]?.name || (numMain ? "未登録" : "再試行してください")}</div>
+    </div>`;
 
-    speak(matches[0] ? matches[0].name + "さん" : (numMain ? "未登録" : "失敗"));
-    
+    window.speechSynthesis.cancel();
+    const s = new SpeechSynthesisUtterance(matches[0] ? matches[0].name + "さん" : (numMain ? "未登録" : "もう一度"));
+    s.lang = 'ja-JP'; window.speechSynthesis.speak(s);
+
     const card = document.createElement('div');
     card.style = "background:white; padding:10px; border-radius:8px; margin:5px 15px; border-left:8px solid " + (matches[0]?'#28a745':'#ccc');
     card.innerHTML = `<span>${areaName}${numSub} ${numMain}</span> <span style="float:right">${matches[0]?.name || "未登録"}</span>`;
