@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（実地フィードバック反映版）</title>
+    <title>車両照合（精度追求・白枠バッファ版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -42,12 +42,12 @@
 </div>
 
 <div id="result-container">
-    <div id="status">準備中</div>
+    <div id="status">Ready</div>
     <div id="info-display"></div>
 </div>
 
 <div id="debug-area">
-    【読取りプレビュー】<br>
+    【解析画像：文字の周囲に白枠を追加】<br>
     <canvas id="canvas-area" class="debug-canvas"></canvas>
     <canvas id="canvas-sub" class="debug-canvas"></canvas>
     <canvas id="canvas-main" class="debug-canvas"></canvas>
@@ -70,17 +70,21 @@ const canvasMain = document.getElementById('canvas-main');
 let employeeList = [];
 let isProcessing = false;
 
+// 地名リストはそのまま（省略...）
 const areaList = ["札幌","函館","旭川","室蘭","苫小牧","釧路","知床","帯広","十勝","北見","青森","弘前","八戸","岩手","盛岡","平泉","宮城","仙台","秋田","山形","庄内","福島","会津","郡山","白河","いわき","水戸","土浦","つくば","宇都宮","日光","那須","とちぎ","群馬","高崎","前橋","千葉","成田","野田","柏","松戸","習志野","船橋","市川","袖ヶ浦","市原","大宮","川口","熊谷","春日部","越谷","所沢","川越","品川","世田谷","足立","江東","葛飾","江戸川","練馬","杉並","板橋","多摩","八王子","横浜","川崎","相模","湘南","山梨","富士山","新潟","長岡","上越","長野","松本","諏訪","南信州","安曇野","富山","石川","金沢","名古屋","三河","岡崎","豊田","尾張小牧","一宮","春日井","豊橋","静岡","沼津","伊豆","浜松","岐阜","飛騨","三重","鈴鹿","四日市","伊勢志摩","福井","大阪","なにわ","和泉","堺","京都","奈良","飛鳥","滋賀","和歌山","神戸","姫路","広島","福山","鳥取","島根","出雲","岡山","倉敷","山口","下関","徳島","香川","高松","愛媛","高知","福岡","北九州","筑豊","久留米","佐賀","長崎","佐世保","熊本","大分","宮崎","鹿児島","奄美","沖縄"];
 
 function fixAreaName(rawText) {
-    if (!rawText) return "??";
+    if (!rawText || rawText.length < 2) return rawText;
     let bestMatch = rawText, maxScore = 0;
     areaList.forEach(area => {
         let score = 0;
         for(let char of rawText) if(area.includes(char)) score++;
-        if(score > maxScore) { maxScore = score; bestMatch = area; }
+        // 一致率が低い場合は無視（那須を宇都宮と間違えないため）
+        if(score > maxScore && score >= (area.length / 2)) { 
+            maxScore = score; bestMatch = area; 
+        }
     });
-    return maxScore > 0 ? bestMatch : rawText;
+    return bestMatch;
 }
 
 function speak(t) {
@@ -105,16 +109,17 @@ fileInput.onchange = (e) => {
 async function startCamera() {
     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280 } });
     video.srcObject = stream;
-    statusDiv.innerText = "Ready";
 }
 
 async function ocrScan(canvas, lang, psm, whitelist) {
-    const options = { tessedit_pageseg_mode: psm };
+    const options = { 
+        tessedit_pageseg_mode: psm,
+        tessjs_create_hocr: '0',
+        tessjs_create_tsv: '0'
+    };
     if(whitelist) options.tessedit_char_whitelist = whitelist;
     const result = await Tesseract.recognize(canvas, lang, options);
-    // ・（ドット）を2や8と誤読するのを防ぐため、文字数が少ない時の「2」などを慎重に処理（簡易フィルタ）
-    let text = result.data.text.trim();
-    return text;
+    return result.data.text.trim();
 }
 
 shutter.onclick = async () => {
@@ -126,27 +131,29 @@ shutter.onclick = async () => {
     const gW = vW * 0.7, gH = gW * (165/330);
     const sX = (vW - gW) / 2, sY = (vH - gH) / 2;
 
-    // 芳岡さんの実測フィードバックを反映した新座標
     const coords = {
-        area: { x: 71,  y: 6,  w: 108, h: 54 }, // 宇都宮対策: 幅を少し広げ 179-71=108
-        sub:  { x: 176, y: 6,  w: 88,  h: 54 }, // 176開始 264-176=88
+        area: { x: 71,  y: 6,  w: 108, h: 54 },
+        sub:  { x: 176, y: 6,  w: 88,  h: 54 },
         main: { x: 59,  y: 56, w: 264, h: 103 }
     };
 
-    const draw = (cvs, rect, w, h) => {
-        cvs.width = w; cvs.height = h;
+    // 周囲に白いマージンを作って描画する関数
+    const drawWithPadding = (cvs, rect, w, h) => {
+        cvs.width = w + 40; cvs.height = h + 40; // 20pxのパディング
         const ctx = cvs.getContext('2d');
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, cvs.width, cvs.height);
         ctx.filter = "contrast(200%) grayscale(100%)";
-        ctx.drawImage(video, sX+(gW*(rect.x/330)), sY+(gH*(rect.y/165)), gW*(rect.w/330), gH*(rect.h/165), 0, 0, w, h);
+        ctx.drawImage(video, sX+(gW*(rect.x/330)), sY+(gH*(rect.y/165)), gW*(rect.w/330), gH*(rect.h/165), 20, 20, w, h);
     };
 
-    draw(canvasArea, coords.area, 300, 150);
-    draw(canvasSub,  coords.sub,  250, 150);
-    draw(canvasMain, coords.main, 600, 240);
+    drawWithPadding(canvasArea, coords.area, 300, 150);
+    drawWithPadding(canvasSub,  coords.sub,  250, 150);
+    drawWithPadding(canvasMain, coords.main, 600, 240);
 
     const [rawArea, rawSub, rawMain] = await Promise.all([
         ocrScan(canvasArea, 'jpn', '7'),
-        ocrScan(canvasSub,  'eng', '8', '0123456789'), // 3桁はPSM 8（単一単語）で粘る
+        ocrScan(canvasSub,  'eng', '8', '0123456789'), 
         ocrScan(canvasMain, 'eng', '7', '0123456789')
     ]);
 
