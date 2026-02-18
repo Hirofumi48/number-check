@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（トリプルスキャン安定版）</title>
+    <title>車両照合（完成度向上版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -59,18 +59,28 @@ const canvases = { area: document.getElementById('canvas-area'), sub: document.g
 let employeeList = [];
 let isProcessing = false;
 
+// 全国の地名リスト
 const areaList = ["札幌","函館","旭川","室蘭","苫小牧","釧路","知床","帯広","十勝","北見","青森","弘前","八戸","岩手","盛岡","平泉","宮城","仙台","秋田","山形","庄内","福島","会津","郡山","白河","いわき","水戸","土浦","つくば","宇都宮","日光","那須","とちぎ","群馬","高崎","前橋","千葉","成田","野田","柏","松戸","習志野","船橋","市川","袖ヶ浦","市原","大宮","川口","熊谷","春日部","越谷","所沢","川越","品川","世田谷","足立","江東","葛飾","江戸川","練馬","杉並","板橋","多摩","八王子","横浜","川崎","相模","湘南","山梨","富士山","新潟","長岡","上越","長野","松本","諏訪","南信州","安曇野","富山","石川","金沢","名古屋","三河","岡崎","豊田","尾張小牧","一宮","春日井","豊橋","静岡","沼津","伊豆","浜松","岐阜","飛騨","三重","鈴鹿","四日市","伊勢志摩","福井","大阪","なにわ","和泉","堺","京都","奈良","飛鳥","滋賀","和歌山","神戸","姫路","広島","福山","鳥取","島根","出雲","岡山","倉敷","山口","下関","徳島","香川","高松","愛媛","高知","福岡","北九州","筑豊","久留米","佐賀","長崎","佐世保","熊本","大分","宮崎","鹿児島","奄美","沖縄"];
 
 function fixAreaName(rawText) {
-    if (!rawText || rawText.length < 2) return rawText;
-    let bestMatch = rawText, maxScore = 0;
+    if (!rawText) return "??";
+    // 誤読しやすい漢字の個別置換（酪->静、子->宇など）
+    let clean = rawText.replace(/酪/g, '静').replace(/子/g, '宇').replace(/旨/g, '宮');
+    let bestMatch = clean, maxScore = 0;
     areaList.forEach(area => {
         let score = 0;
-        for(let char of rawText) if(area.includes(char)) score++;
-        // 宇都宮対策：2文字以上一致、かつ全体の6割以上一致で補正
-        if(score > maxScore && score >= 2 && score >= (area.length * 0.6)) { maxScore = score; bestMatch = area; }
+        for(let char of clean) if(area.includes(char)) score++;
+        if(score > maxScore && score >= (area.length * 0.5)) { maxScore = score; bestMatch = area; }
     });
     return bestMatch;
+}
+
+// 数字のノイズ（ドットの誤読）を消去するフィルター
+function cleanNumber(text, limit) {
+    let num = text.replace(/[^0-9]/g, '');
+    if (!num) return "";
+    // 桁数が多すぎる場合は、ナンバープレートの右寄せ性質を利用して「後ろから」取る
+    return num.length > limit ? num.slice(-limit) : num;
 }
 
 fileInput.onchange = (e) => {
@@ -90,7 +100,6 @@ async function startCamera() {
     video.srcObject = stream;
 }
 
-// 読み取りの「粘り」を強化したOCR関数
 async function deepScan(canvas, lang, psm, whitelist) {
     const worker = await Tesseract.createWorker();
     await worker.loadLanguage(lang);
@@ -98,58 +107,57 @@ async function deepScan(canvas, lang, psm, whitelist) {
     await worker.setParameters({
         tessedit_char_whitelist: whitelist || '',
         tessedit_pageseg_mode: psm,
-        // 1桁や細い文字を拾うためのパラメータ
-        tessjs_create_hocr: '0',
-        tessjs_create_tsv: '0',
     });
     const result = await worker.recognize(canvas);
     await worker.terminate();
-    return result.data.text.replace(/[^0-9\u4e00-\u9faf\u3040-\u309f]/g, '').trim();
+    return result.data.text.trim();
 }
 
 shutter.onclick = async () => {
     if (isProcessing || employeeList.length === 0) return;
     isProcessing = true;
-    statusDiv.innerText = "精密スキャン中...";
+    statusDiv.innerText = "スキャン中...";
 
     const vW = video.videoWidth, vH = video.videoHeight;
     const gW = vW * 0.7, gH = gW * (165/330);
     const sX = (vW - gW) / 2, sY = (vH - gH) / 2;
 
     const draw = (cvs, rect, w, h, contrast) => {
-        cvs.width = w + 80; cvs.height = h + 80;
+        cvs.width = w + 40; cvs.height = h + 40;
         const ctx = cvs.getContext('2d');
         ctx.fillStyle = "white"; ctx.fillRect(0, 0, cvs.width, cvs.height);
-        ctx.filter = `contrast(${contrast}%) grayscale(100%) brightness(90%)`;
-        ctx.drawImage(video, sX+(gW*(rect.x/330)), sY+(gH*(rect.y/165)), gW*(rect.w/330), gH*(rect.h/165), 40, 40, w, h);
+        ctx.filter = `contrast(${contrast}%) grayscale(100%)`;
+        ctx.drawImage(video, sX+(gW*(rect.x/330)), sY+(gH*(rect.y/165)), gW*(rect.w/330), gH*(rect.h/165), 20, 20, w, h);
     };
 
-    const coords = { area: { x: 71, y: 6, w: 108, h: 54 }, sub: { x: 176, y: 6, w: 88, h: 54 }, main: { x: 59, y: 56, w: 264, h: 103 } };
+    // 宇都宮対策：地名枠を少しだけ狭め、3桁番号との境界を明確にする
+    const coords = { area: { x: 71, y: 6, w: 100, h: 54 }, sub: { x: 178, y: 6, w: 86, h: 54 }, main: { x: 59, y: 56, w: 264, h: 103 } };
     
-    // 描画（コントラストを250%まで強化）
-    draw(canvases.area, coords.area, 300, 150, 200);
-    draw(canvases.sub,  coords.sub,  250, 150, 250);
-    draw(canvases.main, coords.main, 600, 240, 250);
+    draw(canvases.area, coords.area, 300, 150, 180);
+    draw(canvases.sub,  coords.sub,  250, 150, 220);
+    draw(canvases.main, coords.main, 600, 240, 220);
 
-    // 解析（地名は単一行モード7、数字は単一単語モード8）
-    const [rawArea, numSub, numMain] = await Promise.all([
+    const [rawArea, rawSub, rawMain] = await Promise.all([
         deepScan(canvases.area, 'jpn', '7'),
         deepScan(canvases.sub,  'eng', '8', '0123456789'),
         deepScan(canvases.main, 'eng', '8', '0123456789')
     ]);
 
     const areaName = fixAreaName(rawArea);
+    const numSub = cleanNumber(rawSub, 3);
+    const numMain = cleanNumber(rawMain, 4);
+    
     const matches = employeeList.filter(emp => emp.plate === numMain);
     
     statusDiv.innerText = matches.length > 0 ? "照合一致" : "照合なし";
     infoDisplay.innerHTML = `<div class="plate-display">
         <div class="plate-top">${areaName} ${numSub}</div>
         <div class="main-num">${numMain || "----"}</div>
-        <div style="font-size:22px; font-weight:bold;">${matches[0]?.name || (numMain ? "未登録" : "再試行してください")}</div>
+        <div style="font-size:22px; font-weight:bold;">${matches[0]?.name || (numMain ? "未登録" : "失敗")}</div>
     </div>`;
 
     window.speechSynthesis.cancel();
-    const s = new SpeechSynthesisUtterance(matches[0] ? matches[0].name + "さん" : (numMain ? "未登録" : "もう一度"));
+    const s = new SpeechSynthesisUtterance(matches[0] ? matches[0].name + "さん" : (numMain ? "未登録" : "失敗"));
     s.lang = 'ja-JP'; window.speechSynthesis.speak(s);
 
     const card = document.createElement('div');
