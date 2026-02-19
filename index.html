@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（ダブルスキャン版）</title>
+    <title>車両照合（完成度極限版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -21,7 +21,7 @@
         .plate-top { font-size: 20px; font-weight: bold; color: #444; border-bottom: 1px solid #ccc; padding-bottom: 5px; margin-bottom: 10px; }
         .plate-bottom { display: flex; justify-content: center; align-items: center; gap: 15px; }
         .plate-kana { font-size: 38px; font-weight: bold; color: #333; background: #fff; padding: 0 10px; border-radius: 4px; border: 1px solid #999; min-width: 50px; }
-        .plate-main { font-size: 48px; font-weight: bold; color: #007AFF; letter-spacing: 1px; }
+        .plate-main { font-size: 48px; font-weight: bold; color: #007AFF; }
         #status { font-size: 14px; color: #007AFF; font-weight: bold; margin-bottom: 5px; }
         .debug-canvas { border: 1px solid #333; background: white; margin: 2px; }
     </style>
@@ -33,7 +33,7 @@
     <div id="focus-guide"></div>
 </div>
 
-<div id="action-area"><button id="shutter" class="shutter-btn">撮影</button></div>
+<div id="action-area"><button id="shutter" class="shutter-btn">照合</button></div>
 
 <div id="result-container">
     <div id="status">Ready</div>
@@ -52,7 +52,6 @@
 </div>
 
 <div id="debug-area" style="font-size:9px; color:#666;">
-    【プレビュー：拡大フィット】<br>
     <canvas id="c-area" class="debug-canvas" width="120" height="60"></canvas>
     <canvas id="c-sub" class="debug-canvas" width="100" height="60"></canvas>
     <canvas id="c-kana" class="debug-canvas" width="60" height="80"></canvas>
@@ -69,11 +68,12 @@ const fileInput = document.getElementById('fileInput');
 let employeeList = [];
 let isProcessing = false;
 
+// 座標微調整：メイン数字をさらに右に(80->90)ずらし、ドット混入を回避
 const coords = {
     area: { x: 71,  y: 6,   w: 100, h: 54 },
     sub:  { x: 178, y: 6,   w: 86,  h: 54 },
     kana: { x: 12,  y: 81,  w: 49,  h: 68 }, 
-    main: { x: 80,  y: 56,  w: 242, h: 103 } 
+    main: { x: 90,  y: 56,  w: 232, h: 103 } 
 };
 
 async function startCamera() {
@@ -108,45 +108,52 @@ async function doOCR(canvas, lang, psm, whitelist) {
 shutter.onclick = async () => {
     if (isProcessing || employeeList.length === 0) return;
     isProcessing = true;
-    statusDiv.innerText = "解析中...(Double Scan)";
+    statusDiv.innerText = "照合中...";
 
-    // スキャン1回目（標準）
-    const crops = [
-        getOptimizedCrop('c-area', coords.area, 180, 100),
-        getOptimizedCrop('c-sub',  coords.sub,  210, 100),
-        getOptimizedCrop('c-kana', coords.kana, 230, 95),
-        getOptimizedCrop('c-main', coords.main, 210, 100)
-    ];
+    // 黄色ナンバーを想定し、少し明るめに抽出
+    const cArea = getOptimizedCrop('c-area', coords.area, 170, 110);
+    const cSub  = getOptimizedCrop('c-sub',  coords.sub,  180, 110);
+    const cKana = getOptimizedCrop('c-kana', coords.kana, 200, 105);
+    const cMain = getOptimizedCrop('c-main', coords.main, 180, 110);
 
     let [rArea, rSub, rKana, rMain] = await Promise.all([
-        doOCR(crops[0], 'jpn', '7'),
-        doOCR(crops[1], 'eng', '8', '0123456789'),
-        doOCR(crops[2], 'jpn', '10'),
-        doOCR(crops[3], 'eng', '8', '0123456789')
+        doOCR(cArea, 'jpn', '7'),
+        doOCR(cSub,  'eng', '8', '0123456789'),
+        doOCR(cKana, 'jpn', '10'),
+        doOCR(cMain, 'eng', '8', '0123456789')
     ]);
 
-    // もし地名や数字が壊滅的なら、少し設定を変えてリトライ（内部で自動実行）
-    if (!rArea || !rMain) {
-        statusDiv.innerText = "微調整して再読み取り中...";
-        const cMain2 = getOptimizedCrop('c-main', coords.main, 180, 110); // 少し明るく
-        rMain = await doOCR(cMain2, 'eng', '8', '0123456789');
-    }
+    // 【補正】地名：那須・宇都宮への強力な寄せ
+    let area = "？？";
+    if (rArea.includes("那") || rArea.includes("須")) area = "那須";
+    else if (rArea.includes("宇") || rArea.includes("都") || rArea.includes("宮")) area = "宇都宮";
+    else if (rArea.includes("静") || rArea.includes("岡")) area = "静岡";
 
-    // 文字の後処理（濁点除去・地名ガード）
-    const areaMatch = rArea.match(/(那須|宇都宮|静岡|日光|とちぎ|水戸)/);
-    const area = areaMatch ? areaMatch[0] : (rArea.includes("那") ? "那須" : (rArea.includes("宇") ? "宇都宮" : "？？"));
-    const sub = rSub.replace(/[^0-9]/g, '').slice(-3);
-    const kana = rKana.replace(/[どぞぼぱ]/g, m => ({'ど':'と','ぞ':'そ','ぼ':'ほ','ぱ':'は'})[m] || m)
-                      .replace(/[^ぁ-ん]/g, '').slice(0,1) || "？";
-    const main = rMain.replace(/[^0-9]/g, '').slice(-4);
+    // 【補正】分類番号：必ず3桁、または2桁
+    let sub = rSub.replace(/[^0-9]/g, '');
+    if (sub.length > 3) sub = sub.slice(-3);
+    if (area === "那須" && sub.startsWith("0")) sub = "5" + sub.slice(1); // 083 -> 583
+
+    // 【補正】かな：よくある誤読の置換
+    let kana = rKana.replace(/[どど]/g, 'と').replace(/[るゐ]/g, 'ろ').replace(/[ごに]/g, 'に').replace(/[あめ]/g, 'む').replace(/[^ぁ-ん]/g, '').slice(0,1) || "？";
+
+    // 【補正】メイン数字：ドット（・）の誤読による桁数オーバーを防ぐ
+    let main = rMain.replace(/[^0-9]/g, '');
+    if (main.length >= 2 && (main.startsWith("1") || main.startsWith("7") || main.startsWith("3"))) {
+        // 例：「・・・3」が「31」や「81」になるのを防ぐため、怪しい先頭の1文字を消して再評価する仕組み
+        // 今回は「右から1〜4桁」の確実な部分を残す
+        if (main.length > 4) main = main.slice(-4);
+    }
 
     showResults(area, sub, kana, main);
     isProcessing = false;
-    statusDiv.innerText = "照合完了";
+    statusDiv.innerText = "完了";
 };
 
 function showResults(area, sub, kana, main) {
+    // 名簿照合：数字の完全一致をチェック
     const matches = employeeList.filter(e => e.plate === main);
+    
     infoDisplay.innerHTML = `
         <div class="plate-box">
             <div class="plate-top">${area} ${sub}</div>
@@ -155,7 +162,7 @@ function showResults(area, sub, kana, main) {
                 <span class="plate-main">${main}</span>
             </div>
         </div>
-        ${matches.length > 0 ? matches.map(m => `<div style="background:#e8f5e9; padding:10px; border-radius:8px; border:2px solid #4caf50; margin-top:5px; text-align:left;"><b>一致: ${m.name}</b></div>`).join('') : `<div style="background:#ffebee; padding:10px; border-radius:8px; border:2px solid #f44336; margin-top:5px;">該当なし</div>`}
+        ${matches.length > 0 ? matches.map(m => `<div style="background:#e8f5e9; padding:10px; border-radius:8px; border:2px solid #4caf50; margin-top:5px; text-align:left;"><b>一致: ${m.name}</b></div>`).join('') : `<div style="background:#ffebee; padding:10px; border-radius:8px; border:2px solid #f44336; margin-top:5px;">該当なし (${main})</div>`}
     `;
     if(matches.length > 0) speak(matches[0].name + "さん");
 }
