@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（ひらがな座標指定版）</title>
+    <title>車両照合（画像拡大・最適化版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -21,8 +21,8 @@
         .plate-top { font-size: 20px; font-weight: bold; color: #555; border-bottom: 1px solid #ccc; padding-bottom: 5px; margin-bottom: 10px; }
         .plate-bottom { display: flex; justify-content: center; align-items: center; gap: 20px; }
         .plate-kana { font-size: 38px; font-weight: bold; color: #333; background: #fff; padding: 0 10px; border-radius: 4px; border: 1px solid #999; min-width: 50px; }
-        .plate-main { font-size: 48px; font-weight: bold; color: #007AFF; letter-spacing: 2px; }
-        .debug-canvas { border: 1px solid #333; background: white; margin: 2px; height: 40px; }
+        .plate-main { font-size: 48px; font-weight: bold; color: #007AFF; }
+        .debug-canvas { border: 1px solid #333; background: white; margin: 2px; }
     </style>
 </head>
 <body>
@@ -54,11 +54,11 @@
 </div>
 
 <div id="debug-area" style="font-size:9px; color:#666;">
-    【OCR解析プレビュー】<br>
-    <canvas id="c-area" class="debug-canvas"></canvas>
-    <canvas id="c-sub" class="debug-canvas"></canvas>
-    <canvas id="c-kana" class="debug-canvas"></canvas>
-    <canvas id="c-main" class="debug-canvas"></canvas>
+    【OCR解析（拡大済）】<br>
+    <canvas id="c-area" class="debug-canvas" width="120" height="60"></canvas>
+    <canvas id="c-sub" class="debug-canvas" width="100" height="60"></canvas>
+    <canvas id="c-kana" class="debug-canvas" width="60" height="80"></canvas>
+    <canvas id="c-main" class="debug-canvas" width="200" height="80"></canvas>
 </div>
 
 <script>
@@ -71,12 +71,12 @@ const fileInput = document.getElementById('fileInput');
 let employeeList = [];
 let isProcessing = false;
 
-// 指定座標の適用（相対座標に変換）
+// 座標設定（芳岡さんの指定をベースに微調整）
 const coords = {
     area: { x: 71,  y: 6,   w: 100, h: 54 },
     sub:  { x: 178, y: 6,   w: 86,  h: 54 },
-    kana: { x: 12,  y: 81,  w: 49,  h: 68 }, // 芳岡さん指定範囲 (12,81)～(61,149)
-    main: { x: 72,  y: 56,  w: 250, h: 103 } 
+    kana: { x: 12,  y: 81,  w: 49,  h: 68 }, 
+    main: { x: 80,  y: 56,  w: 242, h: 103 } // 80から開始して「む」「ら」の干渉を防ぐ
 };
 
 async function startCamera() {
@@ -84,16 +84,26 @@ async function startCamera() {
     video.srcObject = stream;
 }
 
-function getCrop(rect, contrast, brightness) {
+function getOptimizedCrop(canvasId, rect, contrast, brightness) {
     const vW = video.videoWidth, vH = video.videoHeight;
     const gW = vW * 0.7, gH = gW * (165/330);
     const sX = (vW - gW) / 2, sY = (vH - gH) / 2;
     
-    const c = document.createElement('canvas');
-    c.width = rect.w * 2; c.height = rect.h * 2;
+    const c = document.getElementById(canvasId);
     const ctx = c.getContext('2d');
+    
+    // 背景を白でリセット
+    ctx.filter = "none";
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, c.width, c.height);
+    
+    // 切り出しとキャンバスサイズへのフィット
     ctx.filter = `contrast(${contrast}%) brightness(${brightness}%) grayscale(100%)`;
-    ctx.drawImage(video, sX+(gW*(rect.x/330)), sY+(gH*(rect.y/165)), gW*(rect.w/330), gH*(rect.h/165), 0, 0, c.width, c.height);
+    ctx.drawImage(
+        video, 
+        sX + (gW * (rect.x / 330)), sY + (gH * (rect.y / 165)), gW * (rect.w / 330), gH * (rect.h / 165),
+        0, 0, c.width, c.height
+    );
     return c;
 }
 
@@ -112,17 +122,12 @@ async function doOCR(canvas, lang, psm, whitelist) {
 shutter.onclick = async () => {
     if (isProcessing || employeeList.length === 0) return;
     isProcessing = true;
-    statusDiv.innerText = "フルスキャン中...";
+    statusDiv.innerText = "スキャン中...";
 
-    // 抽出と画像補正
-    const cArea = getCrop(coords.area, 180, 100);
-    const cSub  = getCrop(coords.sub,  220, 100);
-    const cKana = getCrop(coords.kana, 250, 90);  // ひらがなはコントラスト強め
-    const cMain = getCrop(coords.main, 220, 100);
-
-    // デバッグプレビュー表示
-    const showDbg = (id, cvs) => document.getElementById(id).getContext('2d').drawImage(cvs, 0, 0, 100, 40);
-    showDbg('c-area', cArea); showDbg('c-sub', cSub); showDbg('c-kana', cKana); showDbg('c-main', cMain);
+    const cArea = getOptimizedCrop('c-area', coords.area, 180, 100);
+    const cSub  = getOptimizedCrop('c-sub',  coords.sub,  220, 100);
+    const cKana = getOptimizedCrop('c-kana', coords.kana, 250, 90);
+    const cMain = getOptimizedCrop('c-main', coords.main, 220, 100);
 
     const [rArea, rSub, rKana, rMain] = await Promise.all([
         doOCR(cArea, 'jpn', '7'),
@@ -131,7 +136,6 @@ shutter.onclick = async () => {
         doOCR(cMain, 'eng', '8', '0123456789')
     ]);
 
-    // 文字処理
     const area = rArea.includes("那") ? "那須" : (rArea.includes("宇") ? "宇都宮" : "？？");
     const sub = rSub.replace(/[^0-9]/g, '').slice(-3);
     const kana = rKana.replace(/[^ぁ-ん]/g, '').slice(0,1) || "？";
@@ -139,7 +143,7 @@ shutter.onclick = async () => {
 
     showResults(area, sub, kana, main);
     isProcessing = false;
-    statusDiv.innerText = "照合完了";
+    statusDiv.innerText = "完了";
 };
 
 function showResults(area, sub, kana, main) {
