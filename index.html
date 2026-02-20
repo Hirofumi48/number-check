@@ -6,7 +6,7 @@
     <title>通勤車両照合システム</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
-        :root { --primary: #007AFF; --success: #34c759; --danger: #ff3b30; }
+        :root { --primary: #007AFF; --success: #34c759; --danger: #ff3b30; --input-bg: #ffffff; }
         body { font-family: -apple-system, sans-serif; text-align: center; background: #f2f2f7; margin: 0; color: #1c1c1e; }
         
         #camera-section { position: sticky; top: 0; background: #000; height: 35vh; overflow: hidden; z-index: 10; }
@@ -27,25 +27,29 @@
         #main-display { margin: 10px 15px; padding: 20px; border-radius: 16px; background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
         .plate-view { display: flex; flex-direction: column; align-items: center; margin-bottom: 15px; }
         .plate-row1 { font-size: 22px; font-weight: bold; color: #8e8e93; letter-spacing: 2px; }
-        .plate-row2 { display: flex; align-items: center; gap: 15px; margin-top: 5px; }
         .p-kana { font-size: 40px; font-weight: bold; color: #3a3a3c; border: 1px solid #d1d1d6; padding: 0 12px; border-radius: 6px; min-width: 50px; background: #fdfdfd; }
         .p-main { font-size: 56px; font-weight: bold; color: var(--primary); letter-spacing: 2px; }
         
         .result-name { font-size: 28px; font-weight: bold; color: var(--success); margin: 10px 0; padding: 10px; border-radius: 8px; background: #f0f9f1; }
         .result-none { font-size: 20px; font-weight: bold; color: var(--danger); }
 
+        /* 手動入力エリアの改善 */
+        #manualNum { 
+            width: 120px; font-size: 22px; font-weight: bold; border-radius: 10px; 
+            border: 3px solid var(--primary); padding: 10px; background: var(--input-bg);
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.1); -webkit-appearance: none;
+        }
+        #manualNum::placeholder { color: #ccc; font-weight: normal; font-size: 16px; }
+
         #history-section { margin: 20px 15px; text-align: left; }
-        .history-title { font-size: 14px; color: #8e8e93; font-weight: bold; margin-bottom: 8px; }
         .history-card { 
             background: white; padding: 12px; border-radius: 12px; margin-bottom: 8px; 
             display: flex; justify-content: space-between; align-items: center;
             border-left: 5px solid var(--primary); box-shadow: 0 1px 3px rgba(0,0,0,0.05);
         }
-        .hist-name { font-size: 18px; font-weight: bold; color: #1c1c1e; }
-        .hist-time { font-size: 11px; color: #8e8e93; }
 
         .admin-tools { margin: 20px; padding-top: 20px; border-top: 1px solid #d1d1d6; }
-        .btn-small { padding: 10px 16px; border-radius: 8px; border: none; font-size: 14px; cursor: pointer; }
+        .btn-small { padding: 12px 16px; border-radius: 10px; border: none; font-size: 14px; cursor: pointer; font-weight: bold; }
         #debug-view { display: none; margin-top: 20px; }
         canvas { border: 1px solid #ccc; background: white; zoom: 0.5; }
     </style>
@@ -62,12 +66,12 @@
 </div>
 
 <div id="main-display">
-    <div id="status" style="font-size: 12px; color: var(--primary); margin-bottom:10px;">名簿を読み込んでください</div>
+    <div id="status" style="font-size: 13px; color: var(--primary); font-weight: bold; margin-bottom:12px;">名簿ファイルを読み込んでください</div>
     
     <div id="current-result">
         <div class="plate-view">
             <div class="plate-row1"><span id="res-area">地名</span> <span id="res-sub">---</span></div>
-            <div class="plate-row2">
+            <div style="display: flex; align-items: center; gap: 15px; margin-top: 5px;">
                 <span class="p-kana" id="res-kana">？</span>
                 <span class="p-main" id="res-main">----</span>
             </div>
@@ -75,19 +79,19 @@
         <div id="match-output"></div>
     </div>
 
-    <div style="margin-top:15px; display: flex; justify-content: center; gap: 10px;">
-        <input type="number" id="manualNum" inputmode="numeric" style="width: 100px; font-size: 20px; border-radius: 8px; border: 1px solid #ccc; padding: 8px;" placeholder="4桁">
-        <button onclick="manualSearch()" class="btn-small" style="background: #8e8e93; color: white;">手動入力</button>
+    <div style="margin-top:20px; display: flex; justify-content: center; align-items: center; gap: 12px;">
+        <input type="number" id="manualNum" inputmode="numeric" placeholder="4桁番号" maxlength="4">
+        <button onclick="manualSearch()" class="btn-small" style="background: #555; color: white;">手動入力</button>
     </div>
 </div>
 
 <div id="history-section">
-    <div class="history-title">最近の照合履歴</div>
+    <div style="font-size: 14px; color: #8e8e93; font-weight: bold; margin-bottom: 8px;">最近の照合履歴</div>
     <div id="history-list"></div>
 </div>
 
 <div class="admin-tools">
-    <button id="loadBtn" onclick="document.getElementById('fileInput').click()" class="btn-small" style="background: var(--success); color: white; font-weight: bold;">名簿CSV読込</button>
+    <button onclick="document.getElementById('fileInput').click()" class="btn-small" style="background: var(--success); color: white;">名簿CSV読込</button>
     <button onclick="toggleDebug()" class="btn-small" style="background: #e5e5ea; color: #3a3a3c; margin-left: 10px;">解析画像表示</button>
     <input type="file" id="fileInput" accept=".csv" style="display:none;">
     
@@ -107,7 +111,6 @@ const historyList = document.getElementById('history-list');
 let employeeList = [];
 let isProcessing = false;
 
-// 芳岡式・最適化座標
 const coords = {
     area: { x: 71,  y: 6,   w: 100, h: 54 },
     sub:  { x: 178, y: 6,   w: 86,  h: 54 },
@@ -120,13 +123,15 @@ async function startCamera() {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280 } });
         video.srcObject = stream;
     } catch(e) {
-        statusDiv.innerText = "カメラ無効（手動入力モード）";
+        statusDiv.innerText = "手動入力モード";
     }
 }
 
-// 音声の初回アクティブ化
-function activateAudio() {
-    const s = new SpeechSynthesisUtterance("");
+// 【改善】音声を強制的にアクティブ化する
+function forceActivateAudio() {
+    window.speechSynthesis.cancel();
+    const s = new SpeechSynthesisUtterance("準備完了");
+    s.volume = 0; // 最初は音量0でシステムに「音を出す許可」をもらう
     window.speechSynthesis.speak(s);
 }
 
@@ -177,11 +182,8 @@ shutter.onclick = async () => {
     else if (rArea.match(/静|岡/)) area = "静岡";
 
     let sub = rSub.replace(/[^0-9]/g, '').slice(-3);
-    if (area === "那須" && sub.startsWith("0")) sub = "5" + sub.slice(1);
-
     let kana = rKana.replace(/[どど]/g, 'と').replace(/[るゐ]/g, 'ろ').replace(/[ごに]/g, 'に')
                       .replace(/[あめ]/g, 'む').replace(/[がぬ]/g, 'ぬ').replace(/[^ぁ-ん]/g, '').slice(0,1) || "？";
-
     let main = rMain.replace(/[^0-9]/g, '').slice(-4);
 
     updateDisplay(area, sub, kana, main);
@@ -214,32 +216,27 @@ function updateDisplay(area, sub, kana, main) {
 function addHistory(name, area, main, time) {
     const card = document.createElement('div');
     card.className = 'history-card';
-    card.innerHTML = `
-        <div class="hist-info">
-            <div class="hist-name">${name}</div>
-            <div style="font-size:12px; color:#666;">${area} / ${main}</div>
-        </div>
-        <div class="hist-time">${time}</div>
-    `;
+    card.innerHTML = `<div style="text-align:left;"><b>${name}</b><br><small>${area} ${main}</small></div><div>${time}</div>`;
     historyList.prepend(card);
     if (historyList.children.length > 8) historyList.lastChild.remove();
 }
 
 function manualSearch() {
-    const val = document.getElementById('manualNum').value;
+    const el = document.getElementById('manualNum');
+    const val = el.value;
     if(val) {
-        // 入力した数字をそのままに、以前の地名があれば引き継ぐ
-        const currentArea = document.getElementById('res-area').innerText;
-        updateDisplay(currentArea === "地名" ? "手動" : currentArea, "---", "-", val);
-        document.getElementById('manualNum').value = ""; // 入力後クリア
-        document.getElementById('manualNum').blur();  // キーボードを閉じる
+        updateDisplay("手動", "---", "-", val);
+        el.value = ""; 
+        el.blur(); 
     }
 }
 
 function speak(t) {
     window.speechSynthesis.cancel();
     const s = new SpeechSynthesisUtterance(t);
-    s.lang = 'ja-JP'; window.speechSynthesis.speak(s);
+    s.lang = 'ja-JP';
+    s.volume = 1.0; 
+    window.speechSynthesis.speak(s);
 }
 
 function toggleDebug() {
@@ -248,7 +245,7 @@ function toggleDebug() {
 }
 
 document.getElementById('fileInput').onchange = (e) => {
-    activateAudio(); // CSV読込のクリックをきっかけに音声を有効化
+    forceActivateAudio(); // ここで無音再生を行い、ブラウザのロックを解除
     const reader = new FileReader();
     reader.onload = (event) => {
         employeeList = event.target.result.split('\n').filter(r => r.trim()).map(row => {
