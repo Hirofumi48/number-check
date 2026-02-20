@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（高精度・複数名対応版）</title>
+    <title>車両照合（入力クリア改善版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -91,7 +91,6 @@ const fileInput = document.getElementById('fileInput');
 let employeeList = [];
 let isProcessing = false;
 
-// 芳岡式・黄金座標
 const coords = {
     area: { x: 71,  y: 6,   w: 100, h: 54 },
     sub:  { x: 178, y: 6,   w: 86,  h: 54 },
@@ -99,7 +98,6 @@ const coords = {
     main: { x: 55,  y: 56,  w: 268, h: 103 } 
 };
 
-// 音声アンロック
 function unlockAudio() {
     window.speechSynthesis.cancel();
     const s = new SpeechSynthesisUtterance(" ");
@@ -132,10 +130,13 @@ async function startCamera() {
     video.srcObject = stream;
 }
 
+// 【修正箇所】手入力ボタンを押したときに値を空にする
 document.getElementById('manualInputBtn').onclick = () => {
     unlockAudio();
+    const inputField = document.getElementById('manual-num-input');
+    inputField.value = ""; // ここで前回の入力を消去
     document.getElementById('manual-input-panel').style.display = "block";
-    document.getElementById('manual-num-input').focus();
+    inputField.focus();
 };
 
 async function execManual() {
