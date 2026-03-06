@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車両照合（入力クリア改善版）</title>
+    <title>車両照合（ズーム・足腰軽減版）</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding-bottom: 50px; }
@@ -15,29 +15,32 @@
             box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.5); pointer-events: none;
         }
 
+        /* ズームコントロール */
+        #zoom-bar {
+            position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+            width: 80%; background: rgba(0,0,0,0.5); padding: 5px 15px; border-radius: 20px;
+            display: flex; align-items: center; gap: 10px; color: white; font-size: 12px;
+        }
+        #zoomRange { flex-grow: 1; height: 25px; }
+
         #action-area { display: flex; justify-content: center; align-items: center; gap: 20px; margin: -40px auto 10px; position: relative; z-index: 100; }
         .shutter-btn { width: 80px; height: 80px; background: white; border: 6px solid #007AFF; border-radius: 50%; box-shadow: 0 4px 15px rgba(0,0,0,0.3); outline: none; }
-        .manual-btn { background: #555; color: white; border: none; padding: 12px 20px; border-radius: 25px; font-size: 14px; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
+        .manual-btn { background: #555; color: white; border: none; padding: 12px 20px; border-radius: 25px; font-size: 14px; font-weight: bold; }
 
         #manual-input-panel { display: none; background: white; margin: 10px 15px; padding: 15px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
-        #manual-num-input { width: 150px; font-size: 28px; padding: 10px; border: 3px solid #007AFF; border-radius: 10px; text-align: center; margin-bottom: 10px; background: #fff; }
+        #manual-num-input { width: 150px; font-size: 28px; padding: 10px; border: 3px solid #007AFF; border-radius: 10px; text-align: center; margin-bottom: 10px; }
 
         #result-container { margin: 10px 15px; min-height: 100px; padding: 15px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); text-align: left; }
         #status { font-size: 14px; color: #007AFF; margin-bottom: 10px; font-weight: bold; text-align: center; background: #eef; padding: 5px; border-radius: 4px; }
         
-        .match-group { border-bottom: 2px dashed #eee; padding-bottom: 10px; margin-bottom: 10px; }
         .info-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
         .info-table th, .info-table td { border: 1px solid #ddd; padding: 8px; font-size: 15px; }
         .info-table th { background-color: #f8f8f8; width: 30%; color: #555; }
         .res-plate-num { font-size: 24px; font-weight: bold; color: #007AFF; }
-        .multi-tag { background: orange; color: white; font-size: 10px; padding: 2px 6px; border-radius: 10px; vertical-align: middle; margin-left: 5px; }
 
-        #history-area { margin: 15px; text-align: left; }
-        .card { background: white; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 8px solid #ccc; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .card { background: white; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 8px solid #ccc; display: flex; justify-content: space-between; align-items: center; }
         .card.match { border-left-color: #28a745; }
         .card.alert { border-left-color: #dc3545; }
-
-        .debug-canvas { display: none; zoom: 0.5; }
     </style>
 </head>
 <body>
@@ -45,6 +48,11 @@
     <div id="camera-container">
         <video id="video" autoplay playsinline></video>
         <div id="focus-guide"></div>
+        <div id="zoom-bar">
+            <span>遠</span>
+            <input type="range" id="zoomRange" min="1" max="5" step="0.1" value="1">
+            <span>近</span>
+        </div>
     </div>
     
     <div id="action-area">
@@ -60,13 +68,11 @@
     </div>
 
     <div id="result-container">
-        <div id="status">名簿(CSV)を読込後、開始してください</div>
+        <div id="status">名簿CSV読込後、開始</div>
         <div id="info-display"></div>
     </div>
 
-    <div id="history-area">
-        <div id="history-items"></div>
-    </div>
+    <div id="history-area" style="margin:15px; text-align:left;"><div id="history-items"></div></div>
 
     <div style="margin:20px;">
         <label style="background:#34c759; color:white; padding:10px 20px; border-radius:8px; cursor:pointer; font-weight:bold;">
@@ -75,10 +81,10 @@
         </label>
     </div>
 
-    <canvas id="c-area" class="debug-canvas" width="120" height="60"></canvas>
-    <canvas id="c-sub" class="debug-canvas" width="100" height="60"></canvas>
-    <canvas id="c-kana" class="debug-canvas" width="80" height="80"></canvas>
-    <canvas id="c-main" class="debug-canvas" width="220" height="80"></canvas>
+    <canvas id="c-area" style="display:none" width="120" height="60"></canvas>
+    <canvas id="c-sub" style="display:none" width="100" height="60"></canvas>
+    <canvas id="c-kana" style="display:none" width="80" height="80"></canvas>
+    <canvas id="c-main" style="display:none" width="220" height="80"></canvas>
 
 <script>
 const video = document.getElementById('video');
@@ -86,16 +92,37 @@ const shutter = document.getElementById('shutter');
 const statusDiv = document.getElementById('status');
 const infoDisplay = document.getElementById('info-display');
 const historyItems = document.getElementById('history-items');
-const fileInput = document.getElementById('fileInput');
-
+const zoomRange = document.getElementById('zoomRange');
+let track = null;
 let employeeList = [];
 let isProcessing = false;
 
+// 黄金座標
 const coords = {
     area: { x: 71,  y: 6,   w: 100, h: 54 },
     sub:  { x: 178, y: 6,   w: 86,  h: 54 },
     kana: { x: 12,  y: 81,  w: 58,  h: 68 }, 
     main: { x: 55,  y: 56,  w: 268, h: 103 } 
+};
+
+async function startCamera() {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280 } });
+    video.srcObject = stream;
+    track = stream.getVideoTracks()[0];
+    
+    // ズーム機能の有効化（対応ブラウザのみ）
+    const capabilities = track.getCapabilities();
+    if (capabilities.zoom) {
+        zoomRange.min = capabilities.zoom.min;
+        zoomRange.max = capabilities.zoom.max;
+        zoomRange.step = capabilities.zoom.step;
+    } else {
+        document.getElementById('zoom-bar').style.display = 'none';
+    }
+}
+
+zoomRange.oninput = () => {
+    if (track) track.applyConstraints({ advanced: [{ zoom: zoomRange.value }] });
 };
 
 function unlockAudio() {
@@ -106,37 +133,24 @@ function unlockAudio() {
 }
 document.addEventListener('touchstart', unlockAudio, { once: true });
 
-fileInput.onchange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+document.getElementById('fileInput').onchange = (e) => {
     const reader = new FileReader();
     reader.onload = (event) => {
-        const rows = event.target.result.split('\n');
-        employeeList = rows.filter(r => r.trim() !== "").map(row => {
+        employeeList = event.target.result.split('\n').filter(r => r.trim() !== "").map(row => {
             const cols = row.split(',');
-            return {
-                plate: (cols[0]||"").replace(/[^0-9]/g, '').trim(),
-                name: (cols[3]||"不明").trim()
-            };
+            return { plate: (cols[0]||"").replace(/[^0-9]/g, '').trim(), name: (cols[3]||"不明").trim() };
         });
         statusDiv.innerText = `準備完了 (${employeeList.length}件)`;
         unlockAudio();
     };
-    reader.readAsText(file, 'UTF-8');
+    reader.readAsText(e.target.files[0], 'UTF-8');
 };
 
-async function startCamera() {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280 } });
-    video.srcObject = stream;
-}
-
-// 【修正箇所】手入力ボタンを押したときに値を空にする
 document.getElementById('manualInputBtn').onclick = () => {
     unlockAudio();
-    const inputField = document.getElementById('manual-num-input');
-    inputField.value = ""; // ここで前回の入力を消去
+    document.getElementById('manual-num-input').value = "";
     document.getElementById('manual-input-panel').style.display = "block";
-    inputField.focus();
+    document.getElementById('manual-num-input').focus();
 };
 
 async function execManual() {
@@ -186,6 +200,7 @@ shutter.onclick = async () => {
     if (rArea.match(/那|須/)) area = "那須";
     else if (rArea.match(/宇|都|宮/)) area = "宇都宮";
     else if (rArea.match(/静|岡/)) area = "静岡";
+    else if (rArea.match(/群|馬/)) area = "群馬"; // 群馬を追加
 
     let kana = rKana.replace(/[どど]/g, 'と').replace(/[るゐ]/g, 'ろ').replace(/[ごに]/g, 'に')
                       .replace(/[あめ]/g, 'む').replace(/[がぬ]/g, 'ぬ').replace(/[^ぁ-ん]/g, '').slice(0,1) || "？";
@@ -206,7 +221,7 @@ function displayResults(header, plate, matches) {
         matches.forEach((m, idx) => {
             const group = document.createElement('div');
             group.className = "match-group";
-            group.innerHTML = `<table class="info-table"><tr><th>情報</th><td>${header}</td></tr><tr><th>ナンバー</th><td class="res-plate-num">${plate}${idx===0 && matches.length>1 ? '<span class="multi-tag">重複</span>':''}</td></tr><tr><th>氏名</th><td>${m.name}</td></tr></table>`;
+            group.innerHTML = `<table class="info-table"><tr><th>情報</th><td>${header}</td></tr><tr><th>ナンバー</th><td class="res-plate-num">${plate}</td></tr><tr><th>氏名</th><td>${m.name}</td></tr></table>`;
             infoDisplay.appendChild(group);
             names.push(m.name);
         });
